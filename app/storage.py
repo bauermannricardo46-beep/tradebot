@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
 from typing import Any
@@ -75,6 +76,10 @@ class TradeDataStore:
                 """
             )
 
+    @staticmethod
+    def _now() -> str:
+        return datetime.now(timezone.utc).isoformat()
+
     def save_candles(self, symbol: str, mode: str, timeframe: str, rows: list[dict[str, Any]]) -> int:
         inserted = 0
         with self.lock, self._connect() as conn:
@@ -83,9 +88,9 @@ class TradeDataStore:
                     """
                     INSERT OR IGNORE INTO market_snapshots
                     (collected_at, symbol, mode, timeframe, open_time, open, high, low, close, volume)
-                    VALUES (datetime('now'), ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (symbol, mode, timeframe, row['open_time'], row['open'], row['high'], row['low'], row['close'], row['volume']),
+                    (self._now(), symbol, mode, timeframe, row['open_time'], row['open'], row['high'], row['low'], row['close'], row['volume']),
                 )
                 inserted += cur.rowcount
         return inserted
@@ -98,9 +103,9 @@ class TradeDataStore:
                 (analyzed_at, symbol, mode, side, timeframe, confidence, probability,
                  expected_value_r, model_ready, model_version, entry, stop_loss,
                  take_profit_1, take_profit_2, risk_reward, reasons_json)
-                VALUES (datetime('now'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (setup.symbol, setup.mode, setup.side, setup.timeframe, setup.confidence,
+                (self._now(), setup.symbol, setup.mode, setup.side, setup.timeframe, setup.confidence,
                  setup.probability, setup.expected_value_r, int(setup.model_ready), setup.model_version,
                  setup.entry, setup.stop_loss, setup.take_profit_1, setup.take_profit_2,
                  setup.risk_reward, json.dumps(setup.reasons, ensure_ascii=False)),
@@ -145,26 +150,19 @@ class TradeDataStore:
                         hit_target = float(candle['low']) <= target
 
                     if hit_stop and hit_target:
-                        result = 'LOSS_STOP_FIRST'
-                        exit_price = stop
+                        result, exit_price = 'LOSS_STOP_FIRST', stop
                     elif hit_stop:
-                        result = 'LOSS_STOP'
-                        exit_price = stop
+                        result, exit_price = 'LOSS_STOP', stop
                     elif hit_target:
-                        result = 'WIN_TP1'
-                        exit_price = target
+                        result, exit_price = 'WIN_TP1', target
                     else:
                         continue
 
                     risk = abs(stop - entry)
                     pnl_r = ((exit_price - entry) if side == 'LONG' else (entry - exit_price)) / risk if risk else 0.0
                     conn.execute(
-                        """
-                        UPDATE outcome_tracking
-                        SET status='RESOLVED', resolved_at=datetime('now'), result=?, pnl_r=?, exit_price=?
-                        WHERE id=?
-                        """,
-                        (result, pnl_r, exit_price, analysis['outcome_id']),
+                        "UPDATE outcome_tracking SET status='RESOLVED', resolved_at=?, result=?, pnl_r=?, exit_price=? WHERE id=?",
+                        (self._now(), result, pnl_r, exit_price, analysis['outcome_id']),
                     )
                     resolved += 1
                     break
