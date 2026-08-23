@@ -1,3 +1,4 @@
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -22,9 +23,9 @@ class Settings(BaseSettings):
     scalping_enabled: bool = True
     swing_enabled: bool = True
     collector_interval_seconds: int = 60
-    data_dir: str = "data"
+    data_dir: str = Field(default="data", validation_alias=AliasChoices("DATA_DIR", "TRADEBOT_DATA_DIR"))
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore", populate_by_name=True)
 
     @property
     def symbol_list(self) -> list[str]:
