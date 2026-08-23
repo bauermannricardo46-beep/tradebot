@@ -8,10 +8,11 @@ from .market_data import fetch_klines
 from .notifications import send_push
 from .notification_routes import router as notification_router
 from .paper import PaperBroker
+from .probability import engine
 from .risk import size_position
 from .strategy import score_long_setup, score_short_setup
 
-app = FastAPI(title="TradeBot AI Long/Short Trader", version="0.4.0")
+app = FastAPI(title="TradeBot AI Long/Short Trader", version="0.5.0")
 broker = PaperBroker(settings.starting_equity)
 alerted_setups: set[str] = set()
 app.include_router(notification_router)
@@ -20,7 +21,7 @@ app.include_router(notification_router)
 def mode_config(mode: str) -> tuple[str, int, int, bool]:
     mode = mode.upper()
     if mode == "SCALP":
-        return settings.scalping_timeframe, settings.scalp_min_confidence, settings.max_scalp_positions, settings.scalping_enabled
+        return settings.scalping_timeframe, settings.scalp_min_confidence, settings.max_scalp_positions, settings.scaling_enabled if hasattr(settings, "scaling_enabled") else settings.scalping_enabled
     if mode == "SWING":
         return settings.swing_timeframe, settings.swing_min_confidence, settings.max_swing_positions, settings.swing_enabled
     raise HTTPException(status_code=400, detail="mode must be SCALP or SWING")
@@ -30,13 +31,13 @@ def mode_config(mode: str) -> tuple[str, int, int, bool]:
 def root():
     return {
         "name": "TradeBot AI Long/Short Trader",
-        "version": "0.4.0",
+        "version": "0.5.0",
         "paper_trading": settings.paper_trading,
         "ui": "/index.html",
         "notifications": "/notifications/config",
         "modes": {
-            "SCALP": {"timeframe": settings.scalping_timeframe, "min_confidence": settings.scalp_min_confidence},
-            "SWING": {"timeframe": settings.swing_timeframe, "min_confidence": settings.swing_min_confidence},
+            "SCALP": {"timeframe": settings.scalping_timeframe, "min_confidence": settings.scalp_min_confidence, "model_ready": engine.ready("SCALP")},
+            "SWING": {"timeframe": settings.swing_timeframe, "min_confidence": settings.swing_min_confidence, "model_ready": engine.ready("SWING")},
         },
         "sides": ["LONG", "SHORT"],
         "time_based_exit": False,
@@ -46,6 +47,17 @@ def root():
 @app.get("/health")
 def health():
     return {"status": "ok", "paper_trading": settings.paper_trading}
+
+
+@app.get("/ai/status")
+def ai_status():
+    return {
+        "SCALP": {"ready": engine.ready("SCALP")},
+        "SWING": {"ready": engine.ready("SWING")},
+        "method": "logistic + histogram gradient boosting + Platt calibration",
+        "fib_features": True,
+        "walk_forward": "3/6/9",
+    }
 
 
 @app.get("/scan")
@@ -65,17 +77,17 @@ async def scan_all(mode: str = "SCALP"):
             ):
                 if setup is not None and setup.confidence >= min_confidence:
                     results.append(setup)
-                    alert_key = f"{setup.mode}:{setup.symbol}:{setup.side}:{setup.confidence}"
+                    alert_key = f"{setup.mode}:{setup.symbol}:{setup.side}:{setup.confidence}:{setup.model_version}"
                     if alert_key not in alerted_setups:
                         send_push(
                             f"{setup.mode} {setup.side} · {setup.symbol}",
-                            f"AI-Setup {setup.confidence}/100 · Entry {setup.entry} · R:R 1:{setup.risk_reward}",
+                            f"AI {setup.confidence}/100 · P={setup.probability:.1%} · EV {setup.expected_value_r:+.2f}R · R:R 1:{setup.risk_reward}",
                             "/index.html",
                         )
                         alerted_setups.add(alert_key)
         except Exception as exc:
             results.append({"symbol": symbol, "error": str(exc)})
-    return {"mode": mode, "timeframe": timeframe, "setups": results}
+    return {"mode": mode, "timeframe": timeframe, "model_ready": engine.ready(mode), "setups": results}
 
 
 @app.get("/scan/all")
@@ -110,7 +122,7 @@ async def auto_paper_trade(mode: str, side: str, symbol: str):
     position = broker.open_position(setup, decision.quantity)
     send_push(
         f"Paper Trade · {mode} {side}",
-        f"{symbol} eröffnet · Entry {setup.entry} · SL {setup.stop_loss} · TP {setup.take_profit_1}",
+        f"{symbol} eröffnet · P={setup.probability:.1%} · EV {setup.expected_value_r:+.2f}R · SL {setup.stop_loss} · TP {setup.take_profit_1}",
         "/index.html",
     )
     return {"setup": setup, "risk": decision, "position": position, "execution": "PAPER_ONLY", "exit_policy": "SL/TP/strategy invalidation only; no time-based exit"}
