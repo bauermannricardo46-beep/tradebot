@@ -14,6 +14,8 @@ class Candle(BaseModel):
 class TradeSetup(BaseModel):
     symbol: str
     side: str = Field(default="SHORT", pattern="^(LONG|SHORT)$")
+    mode: str = Field(default="SWING", pattern="^(SCALP|SWING)$")
+    timeframe: str = "1h"
     confidence: int = Field(ge=0, le=100)
     entry: float
     stop_loss: float
@@ -27,6 +29,8 @@ class PaperPosition(BaseModel):
     id: str
     symbol: str
     side: str = Field(default="SHORT", pattern="^(LONG|SHORT)$")
+    mode: str = Field(default="SWING", pattern="^(SCALP|SWING)$")
+    timeframe: str = "1h"
     entry: float
     stop_loss: float
     take_profit: float
