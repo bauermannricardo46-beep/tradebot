@@ -68,8 +68,10 @@ class TradeDataStore:
                     exit_price REAL,
                     FOREIGN KEY(analysis_id) REFERENCES analysis_snapshots(id)
                 );
+                CREATE INDEX IF NOT EXISTS idx_market_lookup ON market_snapshots(symbol, mode, timeframe, open_time);
                 CREATE INDEX IF NOT EXISTS idx_analysis_time ON analysis_snapshots(analyzed_at);
                 CREATE INDEX IF NOT EXISTS idx_analysis_setup ON analysis_snapshots(symbol, mode, side, analyzed_at);
+                CREATE INDEX IF NOT EXISTS idx_outcome_status ON outcome_tracking(status);
                 """
             )
 
@@ -107,6 +109,67 @@ class TradeDataStore:
             conn.execute("INSERT INTO outcome_tracking (analysis_id, status) VALUES (?, ?)", (analysis_id, status))
             return analysis_id
 
+    def resolve_open_outcomes(self, symbol: str, mode: str, timeframe: str) -> int:
+        resolved = 0
+        with self.lock, self._connect() as conn:
+            open_rows = conn.execute(
+                """
+                SELECT a.*, o.id AS outcome_id
+                FROM analysis_snapshots a
+                JOIN outcome_tracking o ON o.analysis_id = a.id
+                WHERE o.status='OPEN' AND a.symbol=? AND a.mode=? AND a.timeframe=?
+                ORDER BY a.id ASC
+                """,
+                (symbol, mode, timeframe),
+            ).fetchall()
+
+            for analysis in open_rows:
+                candles = conn.execute(
+                    """
+                    SELECT * FROM market_snapshots
+                    WHERE symbol=? AND mode=? AND timeframe=? AND open_time>?
+                    ORDER BY open_time ASC
+                    """,
+                    (symbol, mode, timeframe, analysis['analyzed_at']),
+                ).fetchall()
+                for candle in candles:
+                    side = analysis['side']
+                    stop = float(analysis['stop_loss'])
+                    target = float(analysis['take_profit_1'])
+                    entry = float(analysis['entry'])
+                    if side == 'LONG':
+                        hit_stop = float(candle['low']) <= stop
+                        hit_target = float(candle['high']) >= target
+                    else:
+                        hit_stop = float(candle['high']) >= stop
+                        hit_target = float(candle['low']) <= target
+
+                    if hit_stop and hit_target:
+                        result = 'LOSS_STOP_FIRST'
+                        exit_price = stop
+                    elif hit_stop:
+                        result = 'LOSS_STOP'
+                        exit_price = stop
+                    elif hit_target:
+                        result = 'WIN_TP1'
+                        exit_price = target
+                    else:
+                        continue
+
+                    risk = abs(stop - entry)
+                    pnl_r = ((exit_price - entry) if side == 'LONG' else (entry - exit_price)) / risk if risk else 0.0
+                    conn.execute(
+                        """
+                        UPDATE outcome_tracking
+                        SET status='RESOLVED', resolved_at=datetime('now'), result=?, pnl_r=?, exit_price=?
+                        WHERE id=?
+                        """,
+                        (result, pnl_r, exit_price, analysis['outcome_id']),
+                    )
+                    resolved += 1
+                    break
+        return resolved
+
     def stats(self) -> dict[str, int]:
         with self.lock, self._connect() as conn:
             return {
@@ -114,6 +177,8 @@ class TradeDataStore:
                 "analyses": int(conn.execute("SELECT COUNT(*) FROM analysis_snapshots").fetchone()[0]),
                 "open_outcomes": int(conn.execute("SELECT COUNT(*) FROM outcome_tracking WHERE status='OPEN'").fetchone()[0]),
                 "resolved_outcomes": int(conn.execute("SELECT COUNT(*) FROM outcome_tracking WHERE status='RESOLVED'").fetchone()[0]),
+                "wins": int(conn.execute("SELECT COUNT(*) FROM outcome_tracking WHERE result='WIN_TP1'").fetchone()[0]),
+                "losses": int(conn.execute("SELECT COUNT(*) FROM outcome_tracking WHERE result LIKE 'LOSS_%'").fetchone()[0]),
             }
 
     def recent_analyses(self, limit: int = 50) -> list[dict[str, Any]]:
