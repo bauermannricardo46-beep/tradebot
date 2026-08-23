@@ -1,26 +1,32 @@
-# TradeBot — AI Short Trading Engine
+# TradeBot — AI Long/Short Trading Engine
 
-A modular crypto short-trading research platform with technical screening, risk controls and paper execution.
+A modular crypto trading research platform with LONG/SHORT technical screening, risk controls and paper execution.
 
-> ⚠️ **Paper trading only in this first release.** No live orders are sent.
+> ⚠️ **Paper trading only in this release.** No live orders are sent.
 
-## Architecture
+## Trade lifecycle
 
-- `scanner/` — market data + technical setup detection
-- `risk/` — position sizing and safety limits
-- `execution/` — paper order execution
-- `api/` — FastAPI service
-- `tests/` — automated tests
+Trades are **not time-based**. There is no fixed holding period and no automatic "close after X minutes/hours/days" rule.
+
+A position remains open until a market/strategy exit occurs:
+
+- Stop-loss is hit
+- Take-profit is hit
+- Future strategy logic explicitly signals an exit or reversal
+- A global risk/emergency rule explicitly closes or blocks exposure
+
+The timeframe controls how the market is analyzed; it does **not** determine how long a trade may remain open.
 
 ## Current MVP
 
 - Binance public market-data API for candles
-- Multi-symbol short scanner
-- RSI, EMA trend, MACD histogram, ATR and breakdown/rejection logic
+- Multi-symbol LONG and SHORT scanner
+- RSI, EMA trend, MACD histogram, ATR and breakout/breakdown logic
 - 0–100 setup confidence score
 - Risk-based position sizing
 - Max concurrent positions and daily loss guard
-- Paper trade lifecycle with stop-loss / take-profit handling
+- Side-aware paper trade lifecycle
+- Stop-loss / take-profit handling without time expiry
 - REST endpoints for scanning and paper trading
 
 ## Run locally
