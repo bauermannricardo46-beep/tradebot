@@ -13,7 +13,7 @@ class Candle(BaseModel):
 
 class TradeSetup(BaseModel):
     symbol: str
-    side: str = "SHORT"
+    side: str = Field(default="SHORT", pattern="^(LONG|SHORT)$")
     confidence: int = Field(ge=0, le=100)
     entry: float
     stop_loss: float
@@ -26,7 +26,7 @@ class TradeSetup(BaseModel):
 class PaperPosition(BaseModel):
     id: str
     symbol: str
-    side: str = "SHORT"
+    side: str = Field(default="SHORT", pattern="^(LONG|SHORT)$")
     entry: float
     stop_loss: float
     take_profit: float
