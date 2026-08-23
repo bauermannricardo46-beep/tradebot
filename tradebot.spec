@@ -12,7 +12,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=["pytest"],
     noarchive=False,
 )
 pyz = PYZ(a.pure)
@@ -29,4 +29,6 @@ exe = EXE(
     upx=True,
     console=False,
     disable_windowed_traceback=False,
+    version=None,
+    uac_admin=False,
 )
