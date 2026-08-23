@@ -1,27 +1,40 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 
 from .config import settings
-from .market_data import fetch_klines
+from .live_collector import collector
 from .notifications import send_push
 from .notification_routes import router as notification_router
 from .paper import PaperBroker
 from .probability import engine
 from .risk import size_position
+from .storage import TradeDataStore
 from .strategy import score_long_setup, score_short_setup
 
-app = FastAPI(title="TradeBot AI Long/Short Trader", version="0.5.0")
+store = TradeDataStore(settings.data_dir)
 broker = PaperBroker(settings.starting_equity)
 alerted_setups: set[str] = set()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    collector.start()
+    yield
+    await collector.stop()
+
+
+app = FastAPI(title="TradeBot AI Long/Short Trader", version="0.6.0", lifespan=lifespan)
 app.include_router(notification_router)
 
 
 def mode_config(mode: str) -> tuple[str, int, int, bool]:
     mode = mode.upper()
     if mode == "SCALP":
-        return settings.scalping_timeframe, settings.scalp_min_confidence, settings.max_scalp_positions, settings.scaling_enabled if hasattr(settings, "scaling_enabled") else settings.scalping_enabled
+        return settings.scalping_timeframe, settings.scalp_min_confidence, settings.max_scalp_positions, settings.scalping_enabled
     if mode == "SWING":
         return settings.swing_timeframe, settings.swing_min_confidence, settings.max_swing_positions, settings.swing_enabled
     raise HTTPException(status_code=400, detail="mode must be SCALP or SWING")
@@ -31,10 +44,11 @@ def mode_config(mode: str) -> tuple[str, int, int, bool]:
 def root():
     return {
         "name": "TradeBot AI Long/Short Trader",
-        "version": "0.5.0",
+        "version": "0.6.0",
         "paper_trading": settings.paper_trading,
         "ui": "/index.html",
         "notifications": "/notifications/config",
+        "data": {"directory": settings.data_dir, "database": "tradebot.db", "collector_interval_seconds": settings.collector_interval_seconds},
         "modes": {
             "SCALP": {"timeframe": settings.scalping_timeframe, "min_confidence": settings.scalp_min_confidence, "model_ready": engine.ready("SCALP")},
             "SWING": {"timeframe": settings.swing_timeframe, "min_confidence": settings.swing_min_confidence, "model_ready": engine.ready("SWING")},
@@ -46,7 +60,7 @@ def root():
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "paper_trading": settings.paper_trading}
+    return {"status": "ok", "paper_trading": settings.paper_trading, "collector_running": collector.running}
 
 
 @app.get("/ai/status")
@@ -60,6 +74,23 @@ def ai_status():
     }
 
 
+@app.get("/data/stats")
+def data_stats():
+    return {"directory": settings.data_dir, "database": str(store.db_path), "collector_running": collector.running, **store.stats()}
+
+
+@app.get("/data/analyses")
+def data_analyses(limit: int = 50):
+    return {"items": store.recent_analyses(limit)}
+
+
+@app.post("/data/collect-now")
+async def collect_now():
+    scalp = await collector.collect_mode("SCALP")
+    swing = await collector.collect_mode("SWING")
+    return {"SCALP": scalp, "SWING": swing, "stats": store.stats()}
+
+
 @app.get("/scan")
 async def scan_all(mode: str = "SCALP"):
     mode = mode.upper()
@@ -70,6 +101,11 @@ async def scan_all(mode: str = "SCALP"):
     results = []
     for symbol in settings.symbol_list:
         try:
+            df = await collector.store and None
+        except Exception:
+            df = None
+        try:
+            from .market_data import fetch_klines
             df = await fetch_klines(symbol, timeframe, settings.candle_limit)
             for setup in (
                 score_long_setup(symbol, df, mode, timeframe),
@@ -106,6 +142,7 @@ async def auto_paper_trade(mode: str, side: str, symbol: str):
     if symbol not in settings.symbol_list:
         raise HTTPException(status_code=400, detail="symbol not configured")
 
+    from .market_data import fetch_klines
     df = await fetch_klines(symbol, timeframe, settings.candle_limit)
     setup = (score_long_setup if side == "LONG" else score_short_setup)(symbol, df, mode, timeframe)
     if setup is None or setup.confidence < min_confidence:
