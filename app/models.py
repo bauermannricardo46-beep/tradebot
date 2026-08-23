@@ -17,6 +17,10 @@ class TradeSetup(BaseModel):
     mode: str = Field(default="SWING", pattern="^(SCALP|SWING)$")
     timeframe: str = "1h"
     confidence: int = Field(ge=0, le=100)
+    probability: float = Field(default=0.5, ge=0.0, le=1.0)
+    expected_value_r: float = 0.0
+    model_ready: bool = False
+    model_version: str = "heuristic-fallback"
     entry: float
     stop_loss: float
     take_profit_1: float
