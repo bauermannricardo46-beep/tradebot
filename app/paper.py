@@ -12,10 +12,11 @@ class PaperBroker:
         self.positions: dict[str, PaperPosition] = {}
         self.realized_pnl = 0.0
 
-    def open_short(self, setup: TradeSetup, quantity: float) -> PaperPosition:
+    def open_position(self, setup: TradeSetup, quantity: float) -> PaperPosition:
         position = PaperPosition(
             id=str(uuid4()),
             symbol=setup.symbol,
+            side=setup.side,
             entry=setup.entry,
             stop_loss=setup.stop_loss,
             take_profit=setup.take_profit_1,
@@ -25,27 +26,37 @@ class PaperBroker:
         self.positions[position.id] = position
         return position
 
+    def open_short(self, setup: TradeSetup, quantity: float) -> PaperPosition:
+        return self.open_position(setup, quantity)
+
+    def open_long(self, setup: TradeSetup, quantity: float) -> PaperPosition:
+        return self.open_position(setup, quantity)
+
     def mark_price(self, position_id: str, price: float) -> PaperPosition:
         position = self.positions[position_id]
         if position.status != "OPEN":
             return position
 
         exit_price = None
-        if price >= position.stop_loss:
-            exit_price = position.stop_loss
-        elif price <= position.take_profit:
-            exit_price = position.take_profit
+        if position.side == "SHORT":
+            if price >= position.stop_loss:
+                exit_price = position.stop_loss
+            elif price <= position.take_profit:
+                exit_price = position.take_profit
+        else:
+            if price <= position.stop_loss:
+                exit_price = position.stop_loss
+            elif price >= position.take_profit:
+                exit_price = position.take_profit
 
         if exit_price is not None:
-            pnl = (position.entry - exit_price) * position.quantity
-            updated = position.model_copy(
-                update={
-                    "status": "CLOSED",
-                    "closed_at": datetime.now(timezone.utc),
-                    "exit_price": exit_price,
-                    "pnl": pnl,
-                }
-            )
+            pnl = ((position.entry - exit_price) if position.side == "SHORT" else (exit_price - position.entry)) * position.quantity
+            updated = position.model_copy(update={
+                "status": "CLOSED",
+                "closed_at": datetime.now(timezone.utc),
+                "exit_price": exit_price,
+                "pnl": pnl,
+            })
             self.positions[position_id] = updated
             self.realized_pnl += pnl
             self.equity += pnl
