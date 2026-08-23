@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi import FastAPI, HTTPException
+from fastapi.staticfiles import StaticFiles
 
 from .config import settings
 from .market_data import fetch_klines
@@ -8,7 +9,7 @@ from .paper import PaperBroker
 from .risk import size_position
 from .strategy import score_long_setup, score_short_setup
 
-app = FastAPI(title="TradeBot AI Long/Short Trader", version="0.3.0")
+app = FastAPI(title="TradeBot AI Long/Short Trader", version="0.3.1")
 broker = PaperBroker(settings.starting_equity)
 
 
@@ -25,8 +26,9 @@ def mode_config(mode: str) -> tuple[str, int, int, bool]:
 def root():
     return {
         "name": "TradeBot AI Long/Short Trader",
-        "version": "0.3.0",
+        "version": "0.3.1",
         "paper_trading": settings.paper_trading,
+        "ui": "/index.html",
         "modes": {
             "SCALP": {"timeframe": settings.scalping_timeframe, "min_confidence": settings.scalp_min_confidence},
             "SWING": {"timeframe": settings.swing_timeframe, "min_confidence": settings.swing_min_confidence},
@@ -51,9 +53,10 @@ async def scan_all(mode: str = "SCALP"):
     for symbol in settings.symbol_list:
         try:
             df = await fetch_klines(symbol, timeframe, settings.candle_limit)
-            long_setup = score_long_setup(symbol, df, mode.upper(), timeframe)
-            short_setup = score_short_setup(symbol, df, mode.upper(), timeframe)
-            for setup in (long_setup, short_setup):
+            for setup in (
+                score_long_setup(symbol, df, mode.upper(), timeframe),
+                score_short_setup(symbol, df, mode.upper(), timeframe),
+            ):
                 if setup is not None and setup.confidence >= min_confidence:
                     results.append(setup)
         except Exception as exc:
@@ -63,19 +66,13 @@ async def scan_all(mode: str = "SCALP"):
 
 @app.get("/scan/all")
 async def scan_all_modes():
-    output = {}
-    for mode in ("SCALP", "SWING"):
-        output[mode] = await scan_all(mode)
-    return output
+    return {mode: await scan_all(mode) for mode in ("SCALP", "SWING")}
 
 
 @app.post("/trade/{mode}/{side}/{symbol}")
 async def auto_paper_trade(mode: str, side: str, symbol: str):
-    mode = mode.upper()
-    side = side.upper()
-    symbol = symbol.upper()
+    mode = mode.upper(); side = side.upper(); symbol = symbol.upper()
     timeframe, min_confidence, max_positions, enabled = mode_config(mode)
-
     if not enabled:
         raise HTTPException(status_code=409, detail=f"{mode} mode is disabled")
     if side not in {"LONG", "SHORT"}:
@@ -92,29 +89,18 @@ async def auto_paper_trade(mode: str, side: str, symbol: str):
     if len([p for p in open_total if p.mode == mode]) >= max_positions:
         raise HTTPException(status_code=409, detail=f"maximum {mode.lower()} positions reached")
 
-    decision = size_position(
-        equity=broker.equity,
-        setup=setup,
-        open_positions=len(open_total),
-        daily_pnl=broker.realized_pnl,
-    )
+    decision = size_position(equity=broker.equity, setup=setup, open_positions=len(open_total), daily_pnl=broker.realized_pnl)
     if not decision.allowed:
         raise HTTPException(status_code=409, detail=decision.reason)
 
     position = broker.open_position(setup, decision.quantity)
-    return {
-        "setup": setup,
-        "risk": decision,
-        "position": position,
-        "execution": "PAPER_ONLY",
-        "exit_policy": "SL/TP/strategy invalidation only; no time-based exit",
-    }
+    return {"setup": setup, "risk": decision, "position": position, "execution": "PAPER_ONLY", "exit_policy": "SL/TP/strategy invalidation only; no time-based exit"}
 
 
 @app.get("/positions")
 def positions():
-    return {
-        "equity": broker.equity,
-        "realized_pnl": broker.realized_pnl,
-        "positions": broker.open_positions(),
-    }
+    return {"equity": broker.equity, "realized_pnl": broker.realized_pnl, "positions": broker.open_positions()}
+
+
+# Static dashboard is served at /index.html and as the fallback UI root.
+app.mount("/", StaticFiles(directory="web", html=True), name="web")
