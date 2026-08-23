@@ -1,57 +1,75 @@
 # TradeBot — AI Long/Short Trading Engine
 
-A modular crypto trading research platform with LONG/SHORT technical screening, separate SCALP/SWING profiles, risk controls and paper execution.
+A modular crypto trading research platform with LONG/SHORT strategies, separate SCALP/SWING probability models, risk controls, paper execution and push notifications.
 
 > ⚠️ **Paper trading only in this release.** No live orders are sent.
 
-## Strategy profiles
+## Strategy architecture
 
 ### SCALP
-- 5m analysis timeframe
+- 5m market analysis
 - Higher signal frequency
-- Tighter ATR-based protection
+- Tighter ATR protection
 - Up to 5 scalp positions
-- Default minimum confidence: 87
-- Designed for shorter intraday opportunities
+- Default confidence threshold: 87
 
 ### SWING
-- 1h analysis timeframe
+- 1h market analysis
 - More selective setups
-- Wider ATR-based protection
+- Wider ATR protection
 - Up to 3 swing positions
-- Default minimum confidence: 82
-- Designed to capture larger multi-hour moves
+- Default confidence threshold: 82
 
-The timeframe controls how the market is analyzed; it does **not** impose a holding-period limit.
+The timeframe controls analysis, not the holding period. There is no automatic time-based exit.
 
-## Trade lifecycle
+## Probability Engine
 
-Trades are **not time-based**. There is no fixed holding period and no automatic "close after X minutes/hours/days" rule.
+The system no longer treats the legacy 0–100 score as a literal probability. The new engine maintains two independent models: one for SCALP and one for SWING.
 
-A position remains open until a market/strategy exit occurs:
+Each model uses:
+- technical/volatility/momentum/volume features
+- Fibonacci 38.2 / 50 / 61.8 / 78.6 proximity as features, not hard-coded signals
+- LONG/SHORT as a model feature
+- logistic regression + histogram gradient boosting ensemble
+- probability calibration
+- positive Expected Value filtering
+- chronological 3/6/9 walk-forward validation
 
-- Stop-loss is hit
-- Take-profit is hit
-- Future strategy logic explicitly signals an exit or reversal
-- A global risk/emergency rule explicitly closes or blocks exposure
+A model is only accepted by the live engine when the 3/6/9 validation passes. Otherwise the bot stays on a transparent rule-based fallback.
 
-This allows a scalp to stay open longer when the setup remains valid and a swing position to close quickly when its stop or target is reached.
+Expected value is calculated as:
+
+`EV(R) = P(win) × reward_R - (1 - P(win)) × 1R`
+
+A validated setup must have positive edge before the model can promote it.
+
+## Training
+
+Install dependencies first, then run:
+
+```bash
+python scripts/train_probability_models.py --bars 5000
+```
+
+The trainer downloads paginated Binance public candles, creates TP-before-SL labels for supervised learning, trains SCALP and SWING independently, calibrates the ensemble, evaluates chronological walk-forward blocks and saves local `.joblib` artifacts under `models/`.
+
+The look-ahead used during training exists only to create a supervised label. It is **not** a maximum live holding time.
 
 ## Current MVP
 
-- Binance public market-data API for candles
-- Multi-symbol LONG and SHORT scanner
-- Separate SCALP and SWING profiles
-- RSI, EMA trend, MACD histogram, ATR and breakout/breakdown logic
-- 0–100 setup confidence score
+- Binance public market-data API
+- Multi-symbol LONG/SHORT scanning
+- Separate SCALP/SWING modes
+- Probability + confidence + Expected Value in the API/UI
 - Risk-based position sizing
-- Separate position caps for scalp and swing
+- Separate scalp/swing position caps
 - Daily loss guard
-- Side-aware paper trade lifecycle
-- Stop-loss / take-profit handling without time expiry
-- REST endpoints for scanning and paper trading
+- Side-aware paper execution
+- No time-based trade expiry
+- Browser/OS push notification infrastructure
+- Dark-tech responsive dashboard
 
-## Run locally
+## Run
 
 ```bash
 python -m venv .venv
@@ -61,25 +79,23 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload
 ```
 
-Open `http://127.0.0.1:8000/docs` for the API.
+Open `http://127.0.0.1:8000/index.html`.
 
-## Example endpoints
+## Useful endpoints
 
 ```text
 GET  /scan?mode=SCALP
 GET  /scan?mode=SWING
 GET  /scan/all
+GET  /ai/status
+GET  /positions
 POST /trade/SCALP/LONG/BTCUSDT
 POST /trade/SCALP/SHORT/BTCUSDT
 POST /trade/SWING/LONG/BTCUSDT
 POST /trade/SWING/SHORT/BTCUSDT
-GET  /positions
+GET  /notifications/config
 ```
-
-## Configuration
-
-Copy `.env.example` to `.env` and adjust values. No exchange API key is required for the public-data scanner.
 
 ## Safety model
 
-The bot does not treat confidence as a literal probability of profit. A confidence of `87` means the configured rule engine scores the setup at 87/100. Live execution must remain disabled until the strategy has been backtested and validated.
+A confidence of 87 is only a display/decision threshold. It is not a guaranteed 87% win rate. Live execution remains disabled until the probability models have enough data, pass walk-forward validation and the whole strategy has been backtested in paper trading.
