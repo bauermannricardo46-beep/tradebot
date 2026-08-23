@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -9,7 +10,7 @@ import pandas as pd
 
 from .features import FEATURES, latest_features
 
-MODEL_DIR = Path("models")
+MODEL_DIR = Path(os.getenv("TRADEBOT_MODEL_DIR", "models"))
 
 
 @dataclass
