@@ -26,8 +26,8 @@ class ProbabilityResult:
 class ProbabilityEngine:
     """Two independent profiles: SCALP and SWING.
 
-    Each profile is trained offline as an ensemble of logistic regression and
-    histogram gradient boosting, then calibrated on a later time slice.
+    A model is accepted at runtime only when the offline 3/6/9 walk-forward
+    validation passed. Otherwise the strategy stays on its transparent fallback.
     """
 
     def __init__(self, model_dir: Path = MODEL_DIR):
@@ -40,7 +40,9 @@ class ProbabilityEngine:
         path = self.model_dir / f"{mode.lower()}_probability.joblib"
         if path.exists():
             try:
-                self.models[mode] = joblib.load(path)
+                pack = joblib.load(path)
+                if pack.get("ready", False):
+                    self.models[mode] = pack
             except Exception:
                 self.models.pop(mode, None)
 
@@ -75,7 +77,7 @@ class ProbabilityEngine:
             raw = 0.58 if bullish else 0.42
             calibrated = raw
             version = "heuristic-fallback"
-            evidence = "model not trained"
+            evidence = "model not validated"
             ready = False
 
         ev = calibrated * risk_reward - (1.0 - calibrated)
