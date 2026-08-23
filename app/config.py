@@ -6,12 +6,21 @@ class Settings(BaseSettings):
     paper_trading: bool = True
     starting_equity: float = 10_000.0
     risk_per_trade: float = 0.005
-    max_concurrent_positions: int = 3
+    max_concurrent_positions: int = 8
     max_daily_loss: float = 0.02
     min_confidence: int = 87
     symbols: str = "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT"
-    timeframe: str = "15m"
-    candle_limit: int = 200
+    scalping_timeframe: str = "5m"
+    swing_timeframe: str = "1h"
+    candle_limit: int = 250
+    max_scalp_positions: int = 5
+    max_swing_positions: int = 3
+    scalp_min_confidence: int = 87
+    swing_min_confidence: int = 82
+    scalp_risk_multiplier: float = 0.6
+    swing_risk_multiplier: float = 1.0
+    scalping_enabled: bool = True
+    swing_enabled: bool = True
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
