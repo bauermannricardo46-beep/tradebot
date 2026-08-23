@@ -7,6 +7,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import settings
 from .live_collector import collector
+from .market_data import fetch_klines
 from .notifications import send_push
 from .notification_routes import router as notification_router
 from .paper import PaperBroker
@@ -101,11 +102,6 @@ async def scan_all(mode: str = "SCALP"):
     results = []
     for symbol in settings.symbol_list:
         try:
-            df = await collector.store and None
-        except Exception:
-            df = None
-        try:
-            from .market_data import fetch_klines
             df = await fetch_klines(symbol, timeframe, settings.candle_limit)
             for setup in (
                 score_long_setup(symbol, df, mode, timeframe),
@@ -142,7 +138,6 @@ async def auto_paper_trade(mode: str, side: str, symbol: str):
     if symbol not in settings.symbol_list:
         raise HTTPException(status_code=400, detail="symbol not configured")
 
-    from .market_data import fetch_klines
     df = await fetch_klines(symbol, timeframe, settings.candle_limit)
     setup = (score_long_setup if side == "LONG" else score_short_setup)(symbol, df, mode, timeframe)
     if setup is None or setup.confidence < min_confidence:
