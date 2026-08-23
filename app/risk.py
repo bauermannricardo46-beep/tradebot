@@ -14,7 +14,7 @@ class RiskDecision:
     reason: str
 
 
-def size_short_position(equity: float, setup: TradeSetup, open_positions: int, daily_pnl: float) -> RiskDecision:
+def size_position(equity: float, setup: TradeSetup, open_positions: int, daily_pnl: float) -> RiskDecision:
     if open_positions >= settings.max_concurrent_positions:
         return RiskDecision(False, 0.0, 0.0, "maximum concurrent positions reached")
 
@@ -28,10 +28,14 @@ def size_short_position(equity: float, setup: TradeSetup, open_positions: int, d
     if setup.risk_reward < 2.0:
         return RiskDecision(False, 0.0, 0.0, "risk/reward below 1:2")
 
-    risk_per_unit = setup.stop_loss - setup.entry
+    risk_per_unit = abs(setup.stop_loss - setup.entry)
     if risk_per_unit <= 0:
-        return RiskDecision(False, 0.0, 0.0, "invalid short stop distance")
+        return RiskDecision(False, 0.0, 0.0, "invalid stop distance")
 
     risk_amount = equity * settings.risk_per_trade
     quantity = risk_amount / risk_per_unit
     return RiskDecision(True, quantity, risk_amount, "approved")
+
+
+# Backwards-compatible alias for existing short-only callers.
+size_short_position = size_position
