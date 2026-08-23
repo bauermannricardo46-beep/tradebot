@@ -1,143 +1,89 @@
 # TradeBot — AI Long/Short Trading Engine
 
-A modular crypto trading research platform with LONG/SHORT strategies, separate SCALP/SWING probability models, continuous data collection, outcome tracking, risk controls, paper execution and push notifications.
+TradeBot is a crypto trading research platform with LONG/SHORT strategies, separate SCALP/SWING probability models, multi-timeframe market structure, dynamic exits, persistent live data collection, paper execution and push notifications.
 
-> ⚠️ **Paper trading only in this release.** No live orders are sent.
+> ⚠️ **Paper trading only.** This release sends no live exchange orders.
 
-## Strategy architecture
+## Multi-timeframe strategy
 
 ### SCALP
-- 5m market analysis
-- Higher signal frequency
-- Tighter ATR protection
-- Up to 5 scalp positions
-- Default confidence threshold: 87
+- Primary analysis: 5m
+- Context: 1m / 5m / 15m / 1h / 4h
+- Designed for frequent short-term opportunities
+- A scalp has **no maximum holding time**
+- Dynamic TP1 / TP2 plus trailing exit
 
 ### SWING
-- 1h market analysis
-- More selective setups
-- Wider ATR protection
-- Up to 3 swing positions
-- Default confidence threshold: 82
+- Primary analysis: 1h
+- Context: 5m / 15m / 1h / 4h
+- Designed to capture larger multi-hour moves
+- A swing has **no maximum holding time**
+- Dynamic structure-based targets plus trailing exit
 
-The timeframe controls analysis, not the holding period. There is no automatic time-based exit.
+The timeframe is only the lens used to analyze the market. It does not force a position to close after that amount of time.
+
+## Capture-the-move logic
+
+The strategy combines:
+- multi-timeframe trend alignment
+- swing-high / swing-low structure
+- Fibonacci 38.2 / 50 / 61.8 / 78.6 proximity
+- volatility-aware stop placement
+- probabilistic setup scoring
+- Expected Value filtering
+- extended TP2 targets
+- dynamic trailing stops after TP1
+
+The goal is not to predict the exact absolute low or high. The goal is to enter where the probability/expected value is favorable and let a valid movement continue instead of cutting it off because a clock expired.
 
 ## Probability Engine
 
-The system maintains two independent models: one for SCALP and one for SWING.
+SCALP and SWING use independent probability models. Each model can combine technical, momentum, volatility, volume and Fibonacci-derived features with logistic regression + histogram gradient boosting and probability calibration. A model is accepted at runtime only when it has passed the configured chronological 3/6/9 walk-forward validation.
 
-Each model uses:
-- technical, volatility, momentum and volume features
-- Fibonacci 38.2 / 50 / 61.8 / 78.6 proximity as features, not hard-coded signals
-- LONG/SHORT context
-- logistic regression + histogram gradient boosting ensemble
-- probability calibration
-- positive Expected Value filtering
-- chronological 3/6/9 walk-forward validation
+Expected value:
 
-A model is only accepted by the live engine when the 3/6/9 validation passes. Otherwise the bot stays on a transparent rule-based fallback.
+`EV(R) = P(win) × reward_R - (1 - P(win)) × 1R`
 
 ## Live data collection
 
-When the FastAPI application starts, the collector automatically runs both SCALP and SWING analysis in the background. By default it runs every 60 seconds.
-
-Runtime data is stored locally in:
+When the server starts, the collector automatically gathers live Binance public candle data and qualifying analyses at the configured interval. Data is stored locally in SQLite:
 
 ```text
-data/tradebot.db
+data/
+└── tradebot.db
 ```
 
-SQLite tables persist:
-- market candles
-- qualifying AI analyses
-- model probability / confidence / Expected Value
-- entry, stop and target levels
-- analysis reasons
-- live outcome tracking
-- resolved WIN/LOSS results and realized R multiple
+The database persists between restarts and stores market snapshots, analysis snapshots and outcome labels. The Windows launcher redirects this to `%LOCALAPPDATA%\TradeBotAI\data`.
 
-The collector also evaluates previously OPEN analysis signals against newly collected candles and resolves them when the stored TP1 or SL is reached. If both are inside the same candle, the system uses the conservative assumption that the stop was hit first.
+Useful endpoints:
 
-The database is intentionally ignored by Git so the local learning history stays on the machine/server where TradeBot runs.
+```text
+GET  /data/stats
+GET  /data/analyses?limit=50
+POST /data/collect-now
+GET  /ai/status
+```
 
 ## Training
-
-Install dependencies first, then run:
 
 ```bash
 python scripts/train_probability_models.py --bars 5000
 ```
 
-The trainer downloads paginated Binance public candles, creates TP-before-SL labels for supervised learning, trains SCALP and SWING independently, calibrates the ensemble, evaluates chronological walk-forward blocks and saves local `.joblib` artifacts under `models/`.
+The trainer saves validated local model artifacts under `models/`. The Windows launcher uses `%LOCALAPPDATA%\TradeBotAI\models`.
 
-The look-ahead used during training exists only to create a supervised label. It is **not** a maximum live holding time.
+## Windows app
 
-## Current MVP
+The repository contains a PyInstaller configuration and GitHub Actions workflow that builds a Windows x64 artifact named `TradeBot-Windows-x64`.
 
-- Binance public market-data API
-- Continuous SCALP + SWING collector
-- Persistent SQLite data store under `data/`
-- Automatic live outcome resolution
-- Multi-symbol LONG/SHORT scanning
-- Probability + confidence + Expected Value in the API/UI
-- Risk-based position sizing
-- Separate scalp/swing position caps
-- Daily loss guard
-- Side-aware paper execution
-- No time-based trade expiry
-- Browser/OS push notification infrastructure
-- Dark-tech responsive dashboard
-
-## Run
-
-```bash
-python -m venv .venv
-# Windows: .venv\Scripts\activate
-# Linux/macOS: source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn app.main:app --reload
-```
-
-Open `http://127.0.0.1:8000/index.html`.
-
-For a manual immediate collection cycle:
+Start:
 
 ```text
-POST /data/collect-now
+TradeBot.exe
 ```
 
-For collected-data statistics:
+The launcher shows a startup animation, starts the local FastAPI engine, waits for the health endpoint and opens the embedded desktop Control Center.
 
-```text
-GET /data/stats
-```
+## Safety
 
-For recent stored analyses:
-
-```text
-GET /data/analyses?limit=50
-```
-
-## Useful endpoints
-
-```text
-GET  /scan?mode=SCALP
-GET  /scan?mode=SWING
-GET  /scan/all
-GET  /ai/status
-GET  /data/stats
-GET  /data/analyses
-POST /data/collect-now
-GET  /positions
-POST /trade/SCALP/LONG/BTCUSDT
-POST /trade/SCALP/SHORT/BTCUSDT
-POST /trade/SWING/LONG/BTCUSDT
-POST /trade/SWING/SHORT/BTCUSDT
-GET  /notifications/config
-```
-
-## Safety model
-
-A confidence of 87 is only a display/decision threshold. It is not a guaranteed 87% win rate. Live execution remains disabled until the probability models have enough data, pass walk-forward validation and the whole strategy has been backtested in paper trading.
-
-For reliable operation, run a single application worker for the collector, or move the collector into a dedicated worker process before deploying multiple API workers.
+Confidence is not a guarantee of profit. Live exchange execution remains disabled. New models are only accepted when their validation gate passes, and the trading engine continues to use risk limits and paper execution during development.
