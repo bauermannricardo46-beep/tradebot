@@ -46,10 +46,12 @@ class PaperPosition(BaseModel):
     analysis_timeframes: list[str] = Field(default_factory=list)
     entry: float
     stop_loss: float
-    take_profit: float
+    take_profit_1: float
+    take_profit_2: float
     quantity: float
     opened_at: datetime
     trailing_stop: float | None = None
+    trail_distance: float | None = None
     highest_price: float | None = None
     lowest_price: float | None = None
     tp1_hit: bool = False
