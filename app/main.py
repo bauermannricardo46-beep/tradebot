@@ -5,12 +5,16 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import settings
 from .market_data import fetch_klines
+from .notifications import send_push
+from .notification_routes import router as notification_router
 from .paper import PaperBroker
 from .risk import size_position
 from .strategy import score_long_setup, score_short_setup
 
-app = FastAPI(title="TradeBot AI Long/Short Trader", version="0.3.1")
+app = FastAPI(title="TradeBot AI Long/Short Trader", version="0.4.0")
 broker = PaperBroker(settings.starting_equity)
+alerted_setups: set[str] = set()
+app.include_router(notification_router)
 
 
 def mode_config(mode: str) -> tuple[str, int, int, bool]:
@@ -26,9 +30,10 @@ def mode_config(mode: str) -> tuple[str, int, int, bool]:
 def root():
     return {
         "name": "TradeBot AI Long/Short Trader",
-        "version": "0.3.1",
+        "version": "0.4.0",
         "paper_trading": settings.paper_trading,
         "ui": "/index.html",
+        "notifications": "/notifications/config",
         "modes": {
             "SCALP": {"timeframe": settings.scalping_timeframe, "min_confidence": settings.scalp_min_confidence},
             "SWING": {"timeframe": settings.swing_timeframe, "min_confidence": settings.swing_min_confidence},
@@ -45,23 +50,32 @@ def health():
 
 @app.get("/scan")
 async def scan_all(mode: str = "SCALP"):
+    mode = mode.upper()
     timeframe, min_confidence, _, enabled = mode_config(mode)
     if not enabled:
-        return {"mode": mode.upper(), "enabled": False, "setups": []}
+        return {"mode": mode, "enabled": False, "setups": []}
 
     results = []
     for symbol in settings.symbol_list:
         try:
             df = await fetch_klines(symbol, timeframe, settings.candle_limit)
             for setup in (
-                score_long_setup(symbol, df, mode.upper(), timeframe),
-                score_short_setup(symbol, df, mode.upper(), timeframe),
+                score_long_setup(symbol, df, mode, timeframe),
+                score_short_setup(symbol, df, mode, timeframe),
             ):
                 if setup is not None and setup.confidence >= min_confidence:
                     results.append(setup)
+                    alert_key = f"{setup.mode}:{setup.symbol}:{setup.side}:{setup.confidence}"
+                    if alert_key not in alerted_setups:
+                        send_push(
+                            f"{setup.mode} {setup.side} · {setup.symbol}",
+                            f"AI-Setup {setup.confidence}/100 · Entry {setup.entry} · R:R 1:{setup.risk_reward}",
+                            "/index.html",
+                        )
+                        alerted_setups.add(alert_key)
         except Exception as exc:
             results.append({"symbol": symbol, "error": str(exc)})
-    return {"mode": mode.upper(), "timeframe": timeframe, "setups": results}
+    return {"mode": mode, "timeframe": timeframe, "setups": results}
 
 
 @app.get("/scan/all")
@@ -94,6 +108,11 @@ async def auto_paper_trade(mode: str, side: str, symbol: str):
         raise HTTPException(status_code=409, detail=decision.reason)
 
     position = broker.open_position(setup, decision.quantity)
+    send_push(
+        f"Paper Trade · {mode} {side}",
+        f"{symbol} eröffnet · Entry {setup.entry} · SL {setup.stop_loss} · TP {setup.take_profit_1}",
+        "/index.html",
+    )
     return {"setup": setup, "risk": decision, "position": position, "execution": "PAPER_ONLY", "exit_policy": "SL/TP/strategy invalidation only; no time-based exit"}
 
 
@@ -102,5 +121,4 @@ def positions():
     return {"equity": broker.equity, "realized_pnl": broker.realized_pnl, "positions": broker.open_positions()}
 
 
-# Static dashboard is served at /index.html and as the fallback UI root.
 app.mount("/", StaticFiles(directory="web", html=True), name="web")
