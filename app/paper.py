@@ -17,6 +17,8 @@ class PaperBroker:
             id=str(uuid4()),
             symbol=setup.symbol,
             side=setup.side,
+            mode=setup.mode,
+            timeframe=setup.timeframe,
             entry=setup.entry,
             stop_loss=setup.stop_loss,
             take_profit=setup.take_profit_1,
@@ -64,5 +66,8 @@ class PaperBroker:
 
         return position
 
-    def open_positions(self) -> list[PaperPosition]:
-        return [p for p in self.positions.values() if p.status == "OPEN"]
+    def open_positions(self, mode: str | None = None) -> list[PaperPosition]:
+        positions = [p for p in self.positions.values() if p.status == "OPEN"]
+        if mode is None:
+            return positions
+        return [p for p in positions if p.mode == mode]
