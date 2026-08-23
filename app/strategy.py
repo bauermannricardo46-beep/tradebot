@@ -31,63 +31,79 @@ def _indicators(df: pd.DataFrame) -> pd.DataFrame:
     return out.dropna()
 
 
-def score_short_setup(symbol: str, df: pd.DataFrame) -> TradeSetup | None:
-    data = _indicators(df)
-    if len(data) < 30:
-        return None
-    r = data.iloc[-1]
-
-    score = 0
-    reasons: list[str] = []
-
-    if r.close < r.ema20 < r.ema50:
-        score += 25
-        reasons.append("price below EMA20 and EMA50")
-    elif r.close < r.ema50:
-        score += 12
-        reasons.append("price below EMA50")
-
-    if 45 <= r.rsi <= 62:
-        score += 15
-        reasons.append("RSI supports bearish continuation without being deeply oversold")
-    elif r.rsi < 40:
-        score += 7
-        reasons.append("RSI weak, but downside may be extended")
-
-    if r.macd_hist < 0:
-        score += 15
-        reasons.append("negative MACD histogram")
-
-    if r.close < r.swing_low20:
-        score += 25
-        reasons.append("20-candle support breakdown")
-    elif r.close < r.open:
-        score += 7
-        reasons.append("bearish current candle")
-
-    if r.volume > r.vol_ma20 * 1.25:
-        score += 10
-        reasons.append("above-average volume")
-
+def _build_setup(symbol: str, side: str, score: int, reasons: list[str], entry: float, atr: float) -> TradeSetup | None:
     score = min(100, int(score))
-    entry = float(r.close)
-    atr = float(r.atr)
-    stop = entry + max(1.5 * atr, entry * 0.004)
-    risk = stop - entry
-    tp1 = entry - risk * 2
-    tp2 = entry - risk * 3
-    rr = (entry - tp1) / risk if risk > 0 else 0.0
-
     if score < 50:
         return None
-
+    distance = max(1.5 * atr, entry * 0.004)
+    if side == "SHORT":
+        stop = entry + distance
+        tp1 = entry - distance * 2
+        tp2 = entry - distance * 3
+    else:
+        stop = entry - distance
+        tp1 = entry + distance * 2
+        tp2 = entry + distance * 3
     return TradeSetup(
         symbol=symbol,
+        side=side,
         confidence=score,
         entry=round(entry, 8),
         stop_loss=round(stop, 8),
         take_profit_1=round(tp1, 8),
         take_profit_2=round(tp2, 8),
-        risk_reward=round(rr, 2),
+        risk_reward=2.0,
         reasons=reasons,
     )
+
+
+def score_short_setup(symbol: str, df: pd.DataFrame) -> TradeSetup | None:
+    data = _indicators(df)
+    if len(data) < 30:
+        return None
+    r = data.iloc[-1]
+    score = 0
+    reasons: list[str] = []
+    if r.close < r.ema20 < r.ema50:
+        score += 25; reasons.append("price below EMA20 and EMA50")
+    elif r.close < r.ema50:
+        score += 12; reasons.append("price below EMA50")
+    if 45 <= r.rsi <= 62:
+        score += 15; reasons.append("RSI supports bearish continuation")
+    elif r.rsi < 40:
+        score += 7; reasons.append("RSI weak, but downside may be extended")
+    if r.macd_hist < 0:
+        score += 15; reasons.append("negative MACD histogram")
+    if r.close < r.swing_low20:
+        score += 25; reasons.append("20-candle support breakdown")
+    elif r.close < r.open:
+        score += 7; reasons.append("bearish current candle")
+    if r.volume > r.vol_ma20 * 1.25:
+        score += 10; reasons.append("above-average volume")
+    return _build_setup(symbol, "SHORT", score, reasons, float(r.close), float(r.atr))
+
+
+def score_long_setup(symbol: str, df: pd.DataFrame) -> TradeSetup | None:
+    data = _indicators(df)
+    if len(data) < 30:
+        return None
+    r = data.iloc[-1]
+    score = 0
+    reasons: list[str] = []
+    if r.close > r.ema20 > r.ema50:
+        score += 25; reasons.append("price above EMA20 and EMA50")
+    elif r.close > r.ema50:
+        score += 12; reasons.append("price above EMA50")
+    if 38 <= r.rsi <= 55:
+        score += 15; reasons.append("RSI supports bullish continuation")
+    elif r.rsi > 60:
+        score += 7; reasons.append("RSI strong, but upside may be extended")
+    if r.macd_hist > 0:
+        score += 15; reasons.append("positive MACD histogram")
+    if r.close > r.swing_high20:
+        score += 25; reasons.append("20-candle resistance breakout")
+    elif r.close > r.open:
+        score += 7; reasons.append("bullish current candle")
+    if r.volume > r.vol_ma20 * 1.25:
+        score += 10; reasons.append("above-average volume")
+    return _build_setup(symbol, "LONG", score, reasons, float(r.close), float(r.atr))
