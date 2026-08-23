@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 
 from .config import settings
-from .market_data import fetch_klines
+from .multi_timeframe import fetch_contexts
 from .storage import TradeDataStore
 from .strategy import score_long_setup, score_short_setup
 
@@ -23,23 +23,19 @@ class LiveCollector:
 
         for symbol in settings.symbol_list:
             try:
-                df = await fetch_klines(symbol, timeframe, settings.candle_limit)
-                rows = [
-                    {
-                        "open_time": row.open_time.isoformat(),
-                        "open": float(row.open),
-                        "high": float(row.high),
-                        "low": float(row.low),
-                        "close": float(row.close),
-                        "volume": float(row.volume),
-                    }
+                contexts, raw = await fetch_contexts(symbol, mode, settings.candle_limit)
+                df = raw.get(timeframe)
+                if df is None:
+                    continue
+                primary_rows = [
+                    {"open_time": row.open_time.isoformat(), "open": float(row.open), "high": float(row.high), "low": float(row.low), "close": float(row.close), "volume": float(row.volume)}
                     for row in df.tail(min(len(df), 100)).itertuples(index=False)
                 ]
-                saved_candles += self.store.save_candles(symbol, mode, timeframe, rows)
+                saved_candles += self.store.save_candles(symbol, mode, timeframe, primary_rows)
 
                 for setup in (
-                    score_long_setup(symbol, df, mode, timeframe),
-                    score_short_setup(symbol, df, mode, timeframe),
+                    score_long_setup(symbol, df, mode, timeframe, contexts),
+                    score_short_setup(symbol, df, mode, timeframe, contexts),
                 ):
                     if setup is None:
                         continue
