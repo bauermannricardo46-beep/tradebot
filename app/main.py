@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
@@ -20,6 +22,18 @@ from .strategy import score_long_setup, score_short_setup
 
 broker = PaperBroker(settings.starting_equity)
 monitor_task: asyncio.Task | None = None
+
+
+def resource_path(relative: str) -> Path:
+    """Return a path that works from source and from a PyInstaller bundle."""
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        return Path(sys._MEIPASS) / relative
+    return Path(__file__).resolve().parent.parent / relative
+
+
+WEB_DIR = resource_path("web")
+if not WEB_DIR.is_dir():
+    raise RuntimeError(f"TradeBot UI directory not found: {WEB_DIR}")
 
 
 async def monitor_positions() -> None:
@@ -59,7 +73,7 @@ async def lifespan(app: FastAPI):
     await collector.stop()
 
 
-app = FastAPI(title="TradeBot AI Long/Short Trader", version="0.8.0", lifespan=lifespan)
+app = FastAPI(title="TradeBot AI Long/Short Trader", version="0.8.1", lifespan=lifespan)
 app.include_router(notification_router)
 
 
@@ -86,7 +100,7 @@ async def analyze_symbol(symbol: str, mode: str):
 @app.get("/")
 def root():
     return {
-        "name": "TradeBot AI Long/Short Trader", "version": "0.8.0",
+        "name": "TradeBot AI Long/Short Trader", "version": "0.8.1",
         "paper_trading": settings.paper_trading, "ui": "/index.html",
         "data": {"directory": settings.data_dir, "database": str(store.db_path), "collector_interval_seconds": settings.collector_interval_seconds},
         "modes": {
@@ -184,4 +198,4 @@ def positions():
     return {"equity": broker.equity, "realized_pnl": broker.realized_pnl, "positions": broker.open_positions()}
 
 
-app.mount("/", StaticFiles(directory="web", html=True), name="web")
+app.mount("/", StaticFiles(directory=str(WEB_DIR), html=True), name="web")
