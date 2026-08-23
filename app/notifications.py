@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from typing import Any
 
@@ -38,7 +39,7 @@ def send_push(title: str, body: str, url: str = "/") -> dict[str, int | bool]:
         try:
             webpush(
                 subscription_info=subscription,
-                data=f'{{"title":{title!r},"body":{body!r},"url":{url!r}}}',
+                data=json.dumps({"title": title, "body": body, "url": url}),
                 vapid_private_key=os.environ["VAPID_PRIVATE_KEY"],
                 vapid_claims={"sub": os.environ["VAPID_CLAIMS_EMAIL"]},
             )
