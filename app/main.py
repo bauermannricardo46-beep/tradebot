@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
@@ -22,6 +24,19 @@ broker = PaperBroker(settings.starting_equity)
 monitor_task: asyncio.Task | None = None
 
 
+def static_web_dir() -> Path:
+    """Return the web asset directory for both source and PyInstaller builds."""
+    if getattr(sys, "frozen", False):
+        base = Path(getattr(sys, "_MEIPASS", Path(sys.executable).resolve().parent))
+        candidate = base / "web"
+    else:
+        candidate = Path(__file__).resolve().parent.parent / "web"
+
+    if not candidate.is_dir():
+        raise RuntimeError(f"TradeBot web assets not found: {candidate}")
+    return candidate
+
+
 async def monitor_positions() -> None:
     while True:
         try:
@@ -31,7 +46,12 @@ async def monitor_positions() -> None:
                     continue
                 candle = df.iloc[-1]
                 before = position.status
-                updated = broker.mark_candle(position.id, float(candle.high), float(candle.low), float(candle.close))
+                updated = broker.mark_candle(
+                    position.id,
+                    float(candle.high),
+                    float(candle.low),
+                    float(candle.close),
+                )
                 if before == "OPEN" and updated.status == "CLOSED":
                     send_push(
                         f"Trade geschlossen · {updated.side} {updated.symbol}",
@@ -59,7 +79,7 @@ async def lifespan(app: FastAPI):
     await collector.stop()
 
 
-app = FastAPI(title="TradeBot AI Long/Short Trader", version="0.9.0", lifespan=lifespan)
+app = FastAPI(title="TradeBot AI Long/Short Trader", version="1.0.1", lifespan=lifespan)
 app.include_router(notification_router)
 
 
@@ -87,10 +107,11 @@ async def analyze_symbol(symbol: str, mode: str):
 def root():
     return {
         "name": "TradeBot AI Long/Short Trader",
-        "version": "0.9.0",
+        "version": "1.0.1",
         "paper_trading": settings.paper_trading,
         "ui": "/index.html",
         "notifications": "/notifications/config",
+        "web_assets": str(static_web_dir()),
         "data": {
             "directory": settings.data_dir,
             "database": str(store.db_path),
@@ -125,6 +146,7 @@ def health():
         "paper_trading": settings.paper_trading,
         "collector_running": collector.running,
         "position_monitor": monitor_task is not None,
+        "web_assets": str(static_web_dir()),
     }
 
 
@@ -190,7 +212,14 @@ async def _scan_mode(mode: str):
     mode = mode.upper()
     timeframe, min_confidence, _, enabled = mode_config(mode)
     if not enabled:
-        return {"mode": mode, "enabled": False, "timeframe": timeframe, "scanned": 0, "qualified": 0, "setups": []}
+        return {
+            "mode": mode,
+            "enabled": False,
+            "timeframe": timeframe,
+            "scanned": 0,
+            "qualified": 0,
+            "setups": [],
+        }
 
     results = []
     scanned = 0
@@ -305,4 +334,4 @@ def positions():
     }
 
 
-app.mount("/", StaticFiles(directory="web", html=True), name="web")
+app.mount("/", StaticFiles(directory=static_web_dir(), html=True), name="web")
