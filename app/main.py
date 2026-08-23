@@ -5,20 +5,21 @@ from fastapi import FastAPI, HTTPException
 from .config import settings
 from .market_data import fetch_klines
 from .paper import PaperBroker
-from .risk import size_short_position
-from .strategy import score_short_setup
+from .risk import size_position
+from .strategy import score_long_setup, score_short_setup
 
-app = FastAPI(title="TradeBot AI Short Trader", version="0.1.0")
+app = FastAPI(title="TradeBot AI Long/Short Trader", version="0.2.0")
 broker = PaperBroker(settings.starting_equity)
 
 
 @app.get("/")
 def root():
     return {
-        "name": "TradeBot AI Short Trader",
-        "version": "0.1.0",
+        "name": "TradeBot AI Long/Short Trader",
+        "version": "0.2.0",
         "paper_trading": settings.paper_trading,
         "min_confidence": settings.min_confidence,
+        "sides": ["LONG", "SHORT"],
     }
 
 
@@ -33,26 +34,29 @@ async def scan_all():
     for symbol in settings.symbol_list:
         try:
             df = await fetch_klines(symbol, settings.timeframe, settings.candle_limit)
-            setup = score_short_setup(symbol, df)
-            if setup:
-                results.append(setup)
+            long_setup = score_long_setup(symbol, df)
+            short_setup = score_short_setup(symbol, df)
+            results.extend([s for s in (long_setup, short_setup) if s is not None])
         except Exception as exc:
             results.append({"symbol": symbol, "error": str(exc)})
     return {"setups": results}
 
 
-@app.post("/trade/{symbol}")
-async def auto_paper_trade(symbol: str):
+@app.post("/trade/{side}/{symbol}")
+async def auto_paper_trade(side: str, symbol: str):
+    side = side.upper()
     symbol = symbol.upper()
+    if side not in {"LONG", "SHORT"}:
+        raise HTTPException(status_code=400, detail="side must be LONG or SHORT")
     if symbol not in settings.symbol_list:
         raise HTTPException(status_code=400, detail="symbol not configured")
 
     df = await fetch_klines(symbol, settings.timeframe, settings.candle_limit)
-    setup = score_short_setup(symbol, df)
+    setup = score_long_setup(symbol, df) if side == "LONG" else score_short_setup(symbol, df)
     if setup is None:
-        raise HTTPException(status_code=422, detail="no short setup detected")
+        raise HTTPException(status_code=422, detail=f"no {side.lower()} setup detected")
 
-    decision = size_short_position(
+    decision = size_position(
         equity=broker.equity,
         setup=setup,
         open_positions=len(broker.open_positions()),
@@ -61,13 +65,8 @@ async def auto_paper_trade(symbol: str):
     if not decision.allowed:
         raise HTTPException(status_code=409, detail=decision.reason)
 
-    position = broker.open_short(setup, decision.quantity)
-    return {
-        "setup": setup,
-        "risk": decision,
-        "position": position,
-        "execution": "PAPER_ONLY",
-    }
+    position = broker.open_position(setup, decision.quantity)
+    return {"setup": setup, "risk": decision, "position": position, "execution": "PAPER_ONLY"}
 
 
 @app.get("/positions")
