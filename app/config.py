@@ -21,6 +21,8 @@ class Settings(BaseSettings):
     swing_risk_multiplier: float = 1.0
     scalping_enabled: bool = True
     swing_enabled: bool = True
+    collector_interval_seconds: int = 60
+    data_dir: str = "data"
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
