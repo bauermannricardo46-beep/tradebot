@@ -8,7 +8,6 @@ from .probability import engine, probability_confidence
 
 
 def _build_levels(entry: float, atr: float, side: str, mode: str) -> tuple[float, float, float]:
-    # SCALP reacts to shorter-term volatility; SWING gives the position more room.
     atr_multiplier = 1.0 if mode == "SCALP" else 1.8
     minimum_pct = 0.0025 if mode == "SCALP" else 0.006
     distance = max(atr_multiplier * atr, entry * minimum_pct)
@@ -62,8 +61,7 @@ def score_setup(symbol: str, df: pd.DataFrame, side: str, mode: str, timeframe: 
     r = data.iloc[-1]
     rule_score, reasons = _rule_score(r, side)
     entry = float(r.close)
-    atr = float(r.atr)
-    stop, tp1, tp2 = _build_levels(entry, atr, side, mode)
+    stop, tp1, tp2 = _build_levels(entry, float(r.atr), side, mode)
     risk = abs(stop - entry)
     rr = abs(tp1 - entry) / risk if risk else 0.0
 
@@ -71,13 +69,8 @@ def score_setup(symbol: str, df: pd.DataFrame, side: str, mode: str, timeframe: 
     if prob.model_ready:
         confidence = probability_confidence(prob.probability, True)
         reasons.append(f"kalibrierte Modellwahrscheinlichkeit {prob.probability * 100:.1f}%")
-        if prob.expected_value_r > 0:
-            reasons.append(f"positiver Erwartungswert {prob.expected_value_r:+.2f}R")
-        else:
-            reasons.append(f"Erwartungswert {prob.expected_value_r:+.2f}R")
-        # A model can only promote a setup when the traditional market structure
-        # agrees with it; this avoids a black-box trade override.
-        if rule_score < 35 or prob.expected_value_r <= 0:
+        reasons.append(f"Expected Value {prob.expected_value_r:+.2f}R")
+        if rule_score < 35 or prob.expected_value_r <= 0.05:
             return None
     else:
         confidence = rule_score
@@ -91,7 +84,7 @@ def score_setup(symbol: str, df: pd.DataFrame, side: str, mode: str, timeframe: 
             fallback_probability * rr - (1 - fallback_probability),
             rr,
         )
-        reasons.append("Modell noch nicht trainiert – regelbasierter Fallback")
+        reasons.append("Modell noch nicht validiert – regelbasierter Fallback")
 
     if confidence < 50:
         return None
