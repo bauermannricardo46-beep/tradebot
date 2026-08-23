@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-import math
 
 import joblib
 import numpy as np
@@ -25,11 +24,10 @@ class ProbabilityResult:
 
 
 class ProbabilityEngine:
-    """Two independent probabilistic profiles: SCALP and SWING.
+    """Two independent profiles: SCALP and SWING.
 
     Each profile is trained offline as an ensemble of logistic regression and
-    histogram gradient boosting, then calibrated on a strictly later time slice.
-    At runtime the engine only consumes the most recent feature row.
+    histogram gradient boosting, then calibrated on a later time slice.
     """
 
     def __init__(self, model_dir: Path = MODEL_DIR):
@@ -58,15 +56,17 @@ class ProbabilityEngine:
         if mode in self.models:
             pack = self.models[mode]
             x = pd.DataFrame([row[FEATURES].values], columns=FEATURES)
-            probs = [float(pack["logistic"].predict_proba(x)[0, 1]), float(pack["boosting"].predict_proba(x)[0, 1])]
+            probs = [
+                float(pack["logistic"].predict_proba(x)[0, 1]),
+                float(pack["boosting"].predict_proba(x)[0, 1]),
+            ]
             raw = float(np.mean(probs))
-            calibrated = float(pack["calibrator"].predict([[raw]])[0, 0])
+            calibrated = float(pack["calibrator"].predict_proba([[raw]])[0, 1])
             calibrated = min(max(calibrated, 0.01), 0.99)
             version = pack.get("version", "ensemble")
             evidence = pack.get("evidence", "trained")
             ready = True
         else:
-            # Conservative fallback. It is deliberately NOT presented as a real probability.
             bullish = (
                 row["ema20_gap"] > 0 and row["ema50_gap"] > 0 and row["macd_hist_pct"] > 0
                 if side.upper() == "LONG"
@@ -88,5 +88,4 @@ engine = ProbabilityEngine()
 def probability_confidence(probability: float, model_ready: bool) -> int:
     if not model_ready:
         return 50
-    # Probability is evidence-backed; confidence is just a display score.
     return int(round(probability * 100))
