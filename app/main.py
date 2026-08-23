@@ -13,10 +13,9 @@ from .notification_routes import router as notification_router
 from .paper import PaperBroker
 from .probability import engine
 from .risk import size_position
-from .storage import TradeDataStore
+from .storage import store
 from .strategy import score_long_setup, score_short_setup
 
-store = TradeDataStore(settings.data_dir)
 broker = PaperBroker(settings.starting_equity)
 alerted_setups: set[str] = set()
 
@@ -28,7 +27,7 @@ async def lifespan(app: FastAPI):
     await collector.stop()
 
 
-app = FastAPI(title="TradeBot AI Long/Short Trader", version="0.6.0", lifespan=lifespan)
+app = FastAPI(title="TradeBot AI Long/Short Trader", version="0.7.0", lifespan=lifespan)
 app.include_router(notification_router)
 
 
@@ -45,17 +44,18 @@ def mode_config(mode: str) -> tuple[str, int, int, bool]:
 def root():
     return {
         "name": "TradeBot AI Long/Short Trader",
-        "version": "0.6.0",
+        "version": "0.7.0",
         "paper_trading": settings.paper_trading,
         "ui": "/index.html",
         "notifications": "/notifications/config",
-        "data": {"directory": settings.data_dir, "database": "tradebot.db", "collector_interval_seconds": settings.collector_interval_seconds},
+        "data": {"directory": settings.data_dir, "database": str(store.db_path), "collector_interval_seconds": settings.collector_interval_seconds},
         "modes": {
             "SCALP": {"timeframe": settings.scalping_timeframe, "min_confidence": settings.scalp_min_confidence, "model_ready": engine.ready("SCALP")},
             "SWING": {"timeframe": settings.swing_timeframe, "min_confidence": settings.swing_min_confidence, "model_ready": engine.ready("SWING")},
         },
         "sides": ["LONG", "SHORT"],
         "time_based_exit": False,
+        "live_data": True,
     }
 
 
@@ -109,6 +109,7 @@ async def scan_all(mode: str = "SCALP"):
             ):
                 if setup is not None and setup.confidence >= min_confidence:
                     results.append(setup)
+                    store.save_analysis(setup)
                     alert_key = f"{setup.mode}:{setup.symbol}:{setup.side}:{setup.confidence}:{setup.model_version}"
                     if alert_key not in alerted_setups:
                         send_push(
@@ -152,6 +153,7 @@ async def auto_paper_trade(mode: str, side: str, symbol: str):
         raise HTTPException(status_code=409, detail=decision.reason)
 
     position = broker.open_position(setup, decision.quantity)
+    store.save_analysis(setup)
     send_push(
         f"Paper Trade · {mode} {side}",
         f"{symbol} eröffnet · P={setup.probability:.1%} · EV {setup.expected_value_r:+.2f}R · SL {setup.stop_loss} · TP {setup.take_profit_1}",
