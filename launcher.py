@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import sys
 import threading
@@ -20,7 +21,7 @@ def runtime_root() -> Path:
     return Path(__file__).resolve().parent
 
 
-def show_splash() -> tuple[tk.Tk, tk.Label, tk.Label]:
+def show_splash() -> tk.Tk:
     root = tk.Tk()
     root.overrideredirect(True)
     root.configure(bg="#070912")
@@ -36,7 +37,7 @@ def show_splash() -> tuple[tk.Tk, tk.Label, tk.Label]:
     canvas.create_rectangle(90, 175, 430, 181, fill="#162039", outline="")
     progress = canvas.create_rectangle(90, 175, 90, 181, fill="#64e7ff", outline="")
     status = canvas.create_text(width//2, 215, text="Starting engine…", fill="#8e9ab4", font=("Segoe UI", 10))
-    version = canvas.create_text(width//2, 250, text="LIVE DATA · PAPER TRADING", fill="#53627e", font=("Segoe UI", 9))
+    canvas.create_text(width//2, 250, text="LIVE DATA · PAPER TRADING", fill="#53627e", font=("Segoe UI", 9))
 
     def animate(i: int = 0) -> None:
         if not root.winfo_exists():
@@ -48,14 +49,27 @@ def show_splash() -> tuple[tk.Tk, tk.Label, tk.Label]:
         root.after(40, animate, i + 1)
 
     animate()
-    return root, tk.Label(root), tk.Label(root)
+    return root
 
 
 def start_server():
+    # Important for PyInstaller/Windows: disable Uvicorn's default logging
+    # config so it cannot fail while resolving the packaged formatter.
     import uvicorn
     from app.main import app
 
-    config = uvicorn.Config(app, host=HOST, port=PORT, log_level="warning", access_log=False)
+    logging.basicConfig(
+        level=logging.WARNING,
+        format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+    )
+    config = uvicorn.Config(
+        app,
+        host=HOST,
+        port=PORT,
+        log_level="warning",
+        access_log=False,
+        log_config=None,
+    )
     server = uvicorn.Server(config)
     thread = threading.Thread(target=server.run, name="TradeBotServer", daemon=True)
     thread.start()
@@ -78,7 +92,14 @@ def wait_for_server(timeout: float = 30.0) -> bool:
 def open_app(server):
     import webview
 
-    window = webview.create_window(APP_NAME, f"http://{HOST}:{PORT}/index.html", width=1480, height=920, min_size=(980, 680), resizable=True)
+    window = webview.create_window(
+        APP_NAME,
+        f"http://{HOST}:{PORT}/index.html",
+        width=1480,
+        height=920,
+        min_size=(980, 680),
+        resizable=True,
+    )
 
     def on_closed():
         server.should_exit = True
@@ -96,7 +117,7 @@ def main() -> None:
     os.environ.setdefault("TRADEBOT_DATA_DIR", str(data_dir))
     os.environ.setdefault("TRADEBOT_MODEL_DIR", str(model_dir))
 
-    splash, _, _ = show_splash()
+    splash = show_splash()
     splash.update()
 
     try:
