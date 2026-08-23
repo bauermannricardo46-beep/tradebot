@@ -6,3 +6,6 @@ models/*.joblib
 models/training_summary.json
 .pytest_cache/
 data/
+build/
+dist/
+*.spec.bak
