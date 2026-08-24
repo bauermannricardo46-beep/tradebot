@@ -34,7 +34,7 @@ The strategy combines:
 - extended TP2 targets
 - dynamic trailing stops after TP1
 
-The goal is not to predict the exact absolute low or high. The goal is to enter where the probability/expected value is favorable and let a valid movement continue instead of cutting it off because a clock expired.
+The goal is not to predict the exact absolute low or high. The goal is to enter where probability/expected value is favorable and let a valid movement continue instead of cutting it off because a clock expired.
 
 ## Probability Engine
 
@@ -44,25 +44,51 @@ Expected value:
 
 `EV(R) = P(win) × reward_R - (1 - P(win)) × 1R`
 
-## Live data collection
+## Live data and learning dataset
 
-When the server starts, the collector automatically gathers live Binance public candle data and qualifying analyses at the configured interval. Data is stored locally in SQLite:
+When the server starts, the collector automatically gathers live Binance public candle data for every timeframe used by the strategy. It stores candles **before** storing analyses, so every new signal is anchored to a concrete source candle.
+
+Each new setup receives a deterministic signal key:
+
+`symbol + mode + side + timeframe + source candle open time`
+
+This prevents the same signal from being logged repeatedly every collector cycle.
+
+The database stores:
+- multi-timeframe market candles
+- setup probability/confidence/EV
+- entry, SL, TP1, TP2 and trailing levels
+- swing/Fibonacci levels
+- analysis timeframes and model version
+- model features used at signal time
+- outcome status
+- exit reason and exit price
+- realized R
+- maximum favorable/adverse excursion
+- candles observed before resolution
+
+Outcomes are evaluated on **future candles only**. A later candle can resolve a setup through the initial stop, dynamic trailing stop or extended TP2. When one candle touches both a stop and a target, the label is conservative and treats the stop as first because candle data does not reveal intrabar ordering.
+
+Persistent data:
 
 ```text
 data/
 └── tradebot.db
 ```
 
-The database persists between restarts and stores market snapshots, analysis snapshots and outcome labels. The Windows launcher redirects this to `%LOCALAPPDATA%\TradeBotAI\data`.
+The Windows launcher redirects this to `%LOCALAPPDATA%\TradeBotAI\data`.
 
 Useful endpoints:
 
 ```text
 GET  /data/stats
 GET  /data/analyses?limit=50
+GET  /data/training?limit=10000
 POST /data/collect-now
 GET  /ai/status
 ```
+
+`/data/training` contains only **resolved, candle-anchored observations** suitable for model training. Legacy analyses created by older builds are preserved but are not treated as training examples until they have a valid source candle and outcome.
 
 ## Training
 
@@ -82,7 +108,7 @@ Start:
 TradeBot.exe
 ```
 
-The launcher shows a startup animation, starts the local FastAPI engine, waits for the health endpoint and opens the embedded desktop Control Center.
+The launcher shows a startup animation, starts the local FastAPI engine, waits for the health endpoint and opens the embedded desktop Control Center. The API resolves the bundled `web` directory through the PyInstaller runtime path, so the desktop build does not depend on the current working directory.
 
 ## Safety
 
