@@ -172,7 +172,8 @@ def data_analyses(limit: int = 50):
 
 @app.get("/data/training")
 def data_training(limit: int = 10000):
-    return {"items": store.training_rows(limit), "count": len(store.training_rows(limit))}
+    items = store.training_rows(limit)
+    return {"items": items, "count": len(items)}
 
 
 @app.post("/data/collect-now")
