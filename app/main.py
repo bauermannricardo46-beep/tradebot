@@ -101,9 +101,6 @@ async def demo_loop() -> None:
                 candidates = scalp["setups"] + swing["setups"]
                 candidates.sort(key=lambda x: (x.probability, x.expected_value_r), reverse=True)
                 demo_scan_state["best_setup"] = candidates[0] if candidates else None
-
-                # Fill every free demo slot with the best currently qualified,
-                # distinct setup. We never invent trades just to hit the target.
                 demo_scan_state["opened_last_cycle"] = demo.consider_setups(candidates)
                 await demo.update_positions(fetch_klines)
                 demo_scan_state["last_scan_at"] = datetime.now(timezone.utc).isoformat()
@@ -142,7 +139,7 @@ app.include_router(notification_router)
 def mode_config(mode: str) -> tuple[str, int, int, bool]:
     mode = mode.upper()
     if mode == "SCALP":
-        return settings.scaling_timeframe if hasattr(settings, "scaling_timeframe") else settings.scalping_timeframe, settings.scalp_min_confidence, settings.max_scalp_positions, settings.scalping_enabled
+        return settings.scalping_timeframe, settings.scalp_min_confidence, settings.max_scalp_positions, settings.scalping_enabled
     if mode == "SWING":
         return settings.swing_timeframe, settings.swing_min_confidence, settings.max_swing_positions, settings.swing_enabled
     raise HTTPException(status_code=400, detail="mode must be SCALP or SWING")
