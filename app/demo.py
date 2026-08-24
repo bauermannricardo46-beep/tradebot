@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
@@ -24,31 +25,59 @@ class DemoEngine:
 
     def _init_db(self) -> None:
         with self.lock, self._connect() as conn:
-            conn.executescript("""
-            CREATE TABLE IF NOT EXISTS demo_account (
-                id INTEGER PRIMARY KEY CHECK(id=1), starting_budget REAL NOT NULL,
-                equity REAL NOT NULL, risk_per_trade REAL NOT NULL DEFAULT 0.005,
-                max_positions INTEGER NOT NULL DEFAULT 5, enabled INTEGER NOT NULL DEFAULT 0,
-                updated_at TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS demo_positions (
-                id TEXT PRIMARY KEY, symbol TEXT NOT NULL, side TEXT NOT NULL, mode TEXT NOT NULL,
-                timeframe TEXT NOT NULL, entry REAL NOT NULL, stop_loss REAL NOT NULL, tp1 REAL NOT NULL,
-                tp2 REAL NOT NULL, trailing_stop REAL, trail_distance REAL NOT NULL, quantity REAL NOT NULL,
-                tp1_hit INTEGER NOT NULL DEFAULT 0, opened_at TEXT NOT NULL, closed_at TEXT,
-                exit_price REAL, pnl REAL, exit_reason TEXT, status TEXT NOT NULL DEFAULT 'OPEN'
-            );
-            CREATE TABLE IF NOT EXISTS demo_trades (
-                id INTEGER PRIMARY KEY AUTOINCREMENT, position_id TEXT NOT NULL, closed_at TEXT NOT NULL,
-                symbol TEXT NOT NULL, side TEXT NOT NULL, mode TEXT NOT NULL, pnl REAL NOT NULL,
-                result TEXT NOT NULL, entry REAL NOT NULL, exit_price REAL NOT NULL, risk_r REAL NOT NULL
-            );
-            """)
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS demo_account (
+                    id INTEGER PRIMARY KEY CHECK(id=1),
+                    starting_budget REAL NOT NULL,
+                    equity REAL NOT NULL,
+                    risk_per_trade REAL NOT NULL DEFAULT 0.005,
+                    max_positions INTEGER NOT NULL DEFAULT 5,
+                    enabled INTEGER NOT NULL DEFAULT 0,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS demo_positions (
+                    id TEXT PRIMARY KEY,
+                    symbol TEXT NOT NULL,
+                    side TEXT NOT NULL,
+                    mode TEXT NOT NULL,
+                    timeframe TEXT NOT NULL,
+                    entry REAL NOT NULL,
+                    stop_loss REAL NOT NULL,
+                    tp1 REAL NOT NULL,
+                    tp2 REAL NOT NULL,
+                    trailing_stop REAL,
+                    trail_distance REAL NOT NULL,
+                    quantity REAL NOT NULL,
+                    tp1_hit INTEGER NOT NULL DEFAULT 0,
+                    opened_at TEXT NOT NULL,
+                    closed_at TEXT,
+                    exit_price REAL,
+                    pnl REAL,
+                    exit_reason TEXT,
+                    status TEXT NOT NULL DEFAULT 'OPEN'
+                );
+                CREATE TABLE IF NOT EXISTS demo_trades (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    position_id TEXT NOT NULL,
+                    closed_at TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    side TEXT NOT NULL,
+                    mode TEXT NOT NULL,
+                    pnl REAL NOT NULL,
+                    result TEXT NOT NULL,
+                    entry REAL NOT NULL,
+                    exit_price REAL NOT NULL,
+                    risk_r REAL NOT NULL
+                );
+                """
+            )
             if conn.execute("SELECT id FROM demo_account WHERE id=1").fetchone() is None:
                 conn.execute(
                     "INSERT INTO demo_account(id,starting_budget,equity,risk_per_trade,max_positions,enabled,updated_at) VALUES(1,10000,10000,0.005,5,0,?)",
                     (self._now(),),
                 )
+            conn.commit()
 
     @staticmethod
     def _now() -> str:
@@ -89,37 +118,77 @@ class DemoEngine:
         self.enabled = False
         return self.status()
 
+    def open_count(self) -> int:
+        with self.lock, self._connect() as conn:
+            return int(conn.execute("SELECT COUNT(*) FROM demo_positions WHERE status='OPEN'").fetchone()[0])
+
+    def free_slots(self) -> int:
+        with self.lock, self._connect() as conn:
+            account = self._account(conn)
+            if not account:
+                return 0
+            open_count = int(conn.execute("SELECT COUNT(*) FROM demo_positions WHERE status='OPEN'").fetchone()[0])
+            return max(0, int(account["max_positions"]) - open_count)
+
     def _account(self, conn):
         return conn.execute("SELECT * FROM demo_account WHERE id=1").fetchone()
 
-    def consider_setup(self, setup: Any) -> bool:
+    def consider_setups(self, setups: list[Any]) -> int:
+        """Fill available target slots with the best distinct qualified setups."""
+        if not setups:
+            return 0
+        ranked = sorted(
+            setups,
+            key=lambda s: (float(getattr(s, "probability", 0.0)), float(getattr(s, "expected_value_r", 0.0))),
+            reverse=True,
+        )
+        opened = 0
         with self.lock, self._connect() as conn:
             account = self._account(conn)
             if not account or not account["enabled"]:
-                return False
-            if conn.execute("SELECT COUNT(*) FROM demo_positions WHERE status='OPEN'").fetchone()[0] >= account["max_positions"]:
-                return False
-            if conn.execute(
-                "SELECT 1 FROM demo_positions WHERE status='OPEN' AND symbol=? AND side=? AND mode=?",
-                (setup.symbol, setup.side, setup.mode),
-            ).fetchone():
-                return False
-            distance = abs(float(setup.entry) - float(setup.stop_loss))
-            if distance <= 0:
-                return False
-            risk_amount = float(account["equity"]) * float(account["risk_per_trade"])
-            quantity = min(risk_amount / distance, float(account["equity"]) / float(setup.entry))
-            if quantity <= 0:
-                return False
-            import uuid
-            trail_distance = distance * (0.8 if setup.mode == "SCALP" else 1.0)
-            conn.execute(
-                "INSERT INTO demo_positions(id,symbol,side,mode,timeframe,entry,stop_loss,tp1,tp2,trailing_stop,trail_distance,quantity,opened_at,status) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?, 'OPEN')",
-                (str(uuid.uuid4()), setup.symbol, setup.side, setup.mode, setup.timeframe, setup.entry, setup.stop_loss,
-                 setup.take_profit_1, setup.take_profit_2, setup.trailing_stop, trail_distance, quantity, self._now()),
-            )
+                return 0
+            max_positions = int(account["max_positions"])
+            open_count = int(conn.execute("SELECT COUNT(*) FROM demo_positions WHERE status='OPEN'").fetchone()[0])
+            slots = max(0, max_positions - open_count)
+            if slots <= 0:
+                return 0
+
+            used_keys: set[tuple[str, str, str]] = set()
+            for setup in ranked:
+                if opened >= slots:
+                    break
+                key = (str(setup.symbol), str(setup.side), str(setup.mode))
+                if key in used_keys:
+                    continue
+                duplicate = conn.execute(
+                    "SELECT 1 FROM demo_positions WHERE status='OPEN' AND symbol=? AND side=? AND mode=?",
+                    key,
+                ).fetchone()
+                if duplicate:
+                    continue
+                distance = abs(float(setup.entry) - float(setup.stop_loss))
+                if distance <= 0 or float(setup.entry) <= 0:
+                    continue
+                risk_amount = float(account["equity"]) * float(account["risk_per_trade"])
+                quantity = min(risk_amount / distance, float(account["equity"]) / float(setup.entry))
+                if quantity <= 0:
+                    continue
+                trail_distance = distance * (0.8 if setup.mode == "SCALP" else 1.0)
+                conn.execute(
+                    "INSERT INTO demo_positions(id,symbol,side,mode,timeframe,entry,stop_loss,tp1,tp2,trailing_stop,trail_distance,quantity,opened_at,status) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?, 'OPEN')",
+                    (
+                        str(uuid.uuid4()), setup.symbol, setup.side, setup.mode, setup.timeframe,
+                        setup.entry, setup.stop_loss, setup.take_profit_1, setup.take_profit_2,
+                        setup.trailing_stop, trail_distance, quantity, self._now(),
+                    ),
+                )
+                used_keys.add(key)
+                opened += 1
             conn.commit()
-            return True
+        return opened
+
+    def consider_setup(self, setup: Any) -> bool:
+        return bool(self.consider_setups([setup]))
 
     async def update_positions(self, fetch_klines) -> int:
         with self.lock, self._connect() as conn:
@@ -214,7 +283,8 @@ class DemoEngine:
                 "trades": total, "closed_trades": total, "wins": wins, "losses": losses,
                 "win_rate": wins / total * 100 if total else 0.0,
                 "risk_per_trade": float(a["risk_per_trade"]), "max_positions": int(a["max_positions"]),
-                "open_positions": open_positions, "updated_at": a["updated_at"],
+                "open_positions": open_positions, "target_open_positions": int(a["max_positions"]),
+                "free_slots": max(0, int(a["max_positions"]) - open_positions), "updated_at": a["updated_at"],
             }
 
     def open_positions(self) -> list[dict[str, Any]]:
@@ -231,23 +301,20 @@ class DemoEngine:
         with self.lock, self._connect() as conn:
             open_rows = conn.execute(
                 """
-                SELECT
-                    id AS position_id, opened_at AS opened_at, NULL AS closed_at,
-                    symbol, side, mode, entry, NULL AS exit_price, NULL AS pnl,
-                    'OPEN' AS status, NULL AS result, NULL AS risk_r, exit_reason,
-                    stop_loss, tp1, tp2, trailing_stop, quantity, timeframe
-                FROM demo_positions
-                WHERE status='OPEN'
+                SELECT id AS position_id, opened_at, NULL AS closed_at,
+                       symbol, side, mode, entry, NULL AS exit_price, NULL AS pnl,
+                       'OPEN' AS status, NULL AS result, NULL AS risk_r, exit_reason,
+                       stop_loss, tp1, tp2, trailing_stop, quantity, timeframe
+                FROM demo_positions WHERE status='OPEN'
                 """
             ).fetchall()
             closed_rows = conn.execute(
                 """
-                SELECT
-                    position_id, NULL AS opened_at, closed_at,
-                    symbol, side, mode, entry, exit_price, pnl,
-                    'CLOSED' AS status, result, risk_r, NULL AS exit_reason,
-                    NULL AS stop_loss, NULL AS tp1, NULL AS tp2, NULL AS trailing_stop,
-                    NULL AS quantity, NULL AS timeframe
+                SELECT position_id, NULL AS opened_at, closed_at,
+                       symbol, side, mode, entry, exit_price, pnl,
+                       'CLOSED' AS status, result, risk_r, NULL AS exit_reason,
+                       NULL AS stop_loss, NULL AS tp1, NULL AS tp2, NULL AS trailing_stop,
+                       NULL AS quantity, NULL AS timeframe
                 FROM demo_trades
                 """
             ).fetchall()
