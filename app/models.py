@@ -16,6 +16,7 @@ class TradeSetup(BaseModel):
     side: str = Field(default="SHORT", pattern="^(LONG|SHORT)$")
     mode: str = Field(default="SWING", pattern="^(SCALP|SWING)$")
     timeframe: str = "1h"
+    source_open_time: datetime | None = None
     analysis_timeframes: list[str] = Field(default_factory=list)
     confidence: int = Field(ge=0, le=100)
     probability: float = Field(default=0.5, ge=0.0, le=1.0)
