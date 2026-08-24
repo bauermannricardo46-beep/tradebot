@@ -106,7 +106,7 @@ app.include_router(notification_router)
 def mode_config(mode: str) -> tuple[str, int, int, bool]:
     mode = mode.upper()
     if mode == "SCALP":
-        return settings.scaling_timeframe if hasattr(settings, "scaling_timeframe") else settings.scalping_timeframe, settings.scalp_min_confidence, settings.max_scalp_positions, settings.scalping_enabled
+        return settings.scalping_timeframe, settings.scalp_min_confidence, settings.max_scalp_positions, settings.scalping_enabled
     if mode == "SWING":
         return settings.swing_timeframe, settings.swing_min_confidence, settings.max_swing_positions, settings.swing_enabled
     raise HTTPException(status_code=400, detail="mode must be SCALP or SWING")
@@ -117,7 +117,9 @@ async def analyze_symbol(symbol: str, mode: str):
     if not enabled:
         return timeframe, None, None
     contexts, raw = await fetch_contexts(symbol, mode, settings.candle_limit)
-    primary = raw.get(timeframe) or await fetch_klines(symbol, timeframe, settings.candle_limit)
+    primary = raw.get(timeframe)
+    if primary is None:
+        primary = await fetch_klines(symbol, timeframe, settings.candle_limit)
     return timeframe, contexts, primary
 
 
@@ -148,8 +150,7 @@ def data_analyses(limit: int = 50):
 
 @app.get("/data/training")
 def data_training(limit: int = 10000):
-    items = store.training_rows(limit)
-    return {"items": items, "count": len(items)}
+    return {"items": store.training_rows(limit), "count": len(store.training_rows(limit))}
 
 
 @app.post("/data/collect-now")
