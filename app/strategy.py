@@ -120,17 +120,30 @@ def score_setup(symbol: str, df: pd.DataFrame, side: str, mode: str, timeframe: 
     if confidence < 50:
         return None
     return TradeSetup(
-        symbol=symbol, side=side, mode=mode, timeframe=timeframe,
+        symbol=symbol,
+        side=side,
+        mode=mode,
+        timeframe=timeframe,
+        source_open_time=pd.to_datetime(r.open_time, utc=True).to_pydatetime(),
         analysis_timeframes=list(contexts.keys()) if contexts else [timeframe],
         confidence=confidence,
         probability=prob.probability,
         expected_value_r=round(prob.expected_value_r, 3),
-        model_ready=prob.model_ready, model_version=prob.model_version,
-        entry=round(price, 8), stop_loss=round(stop, 8),
-        take_profit_1=round(tp1, 8), take_profit_2=round(tp2, 8),
-        risk_reward=round(rr, 2), swing_high=round(swing_high, 8), swing_low=round(swing_low, 8),
-        fib_382=round(fib382, 8), fib_500=round(fib500, 8), fib_618=round(fib618, 8), fib_786=round(fib786, 8),
-        trailing_stop=round(trailing, 8), reasons=reasons,
+        model_ready=prob.model_ready,
+        model_version=prob.model_version,
+        entry=round(price, 8),
+        stop_loss=round(stop, 8),
+        take_profit_1=round(tp1, 8),
+        take_profit_2=round(tp2, 8),
+        risk_reward=round(rr, 2),
+        swing_high=round(swing_high, 8),
+        swing_low=round(swing_low, 8),
+        fib_382=round(fib382, 8),
+        fib_500=round(fib500, 8),
+        fib_618=round(fib618, 8),
+        fib_786=round(fib786, 8),
+        trailing_stop=round(trailing, 8),
+        reasons=reasons,
     )
 
 
