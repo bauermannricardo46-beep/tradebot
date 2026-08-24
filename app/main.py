@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import sys
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -28,6 +29,15 @@ demo = DemoEngine(store.db_path)
 execution = ExecutionMode(store.db_path)
 monitor_task: asyncio.Task | None = None
 demo_task: asyncio.Task | None = None
+
+demo_scan_state = {
+    "running": False,
+    "last_scan_at": None,
+    "scalp": {"scanned": 0, "qualified": 0, "rejected": 0, "errors": 0},
+    "swing": {"scanned": 0, "qualified": 0, "rejected": 0, "errors": 0},
+    "best_setup": None,
+    "last_error": None,
+}
 
 
 def web_directory() -> str:
@@ -73,15 +83,30 @@ async def monitor_positions() -> None:
 
 
 async def demo_loop() -> None:
+    global demo_scan_state
     while True:
-        try:
-            if demo.enabled and execution.get()["mode"] == "DEMO":
-                scalp, swing = await asyncio.gather(_scan_mode("SCALP", persist=False), _scan_mode("SWING", persist=False))
-                for setup in scalp["setups"] + swing["setups"]:
+        if demo.enabled and execution.get()["mode"] == "DEMO":
+            demo_scan_state["running"] = True
+            demo_scan_state["last_error"] = None
+            try:
+                scalp, swing = await asyncio.gather(
+                    _scan_mode("SCALP", persist=False),
+                    _scan_mode("SWING", persist=False),
+                )
+                demo_scan_state["scalp"] = {k: scalp.get(k, 0) for k in ("scanned", "qualified", "rejected", "errors")}
+                demo_scan_state["swing"] = {k: swing.get(k, 0) for k in ("scanned", "qualified", "rejected", "errors")}
+                candidates = scalp["setups"] + swing["setups"]
+                candidates.sort(key=lambda x: (x.probability, x.expected_value_r), reverse=True)
+                demo_scan_state["best_setup"] = candidates[0] if candidates else None
+                for setup in candidates:
                     demo.consider_setup(setup)
                 await demo.update_positions(fetch_klines)
-        except Exception:
-            pass
+                demo_scan_state["last_scan_at"] = datetime.now(timezone.utc).isoformat()
+            except Exception as exc:
+                demo_scan_state["last_error"] = str(exc)
+                demo_scan_state["last_scan_at"] = datetime.now(timezone.utc).isoformat()
+            finally:
+                demo_scan_state["running"] = False
         await asyncio.sleep(30)
 
 
@@ -105,7 +130,7 @@ async def lifespan(app: FastAPI):
     await collector.stop()
 
 
-app = FastAPI(title="TradeBot AI Long/Short Trader", version="1.2.0", lifespan=lifespan)
+app = FastAPI(title="TradeBot AI Long/Short Trader", version="1.3.0", lifespan=lifespan)
 app.include_router(notification_router)
 
 
@@ -131,12 +156,12 @@ async def analyze_symbol(symbol: str, mode: str):
 
 @app.get("/")
 def root():
-    return {"name":"TradeBot AI Long/Short Trader","version":"1.2.0","paper_trading":settings.paper_trading,"ui":"/index.html","execution":execution.get(),"demo":demo.status(),"data":{"directory":settings.data_dir,"database":str(store.db_path),"collector_interval_seconds":settings.collector_interval_seconds},"modes":{"SCALP":{"timeframe":settings.scalping_timeframe,"min_confidence":settings.scalp_min_confidence,"max_positions":settings.max_scalp_positions,"model_ready":engine.ready("SCALP"),"analysis":["1m","5m","15m","1h","4h"]},"SWING":{"timeframe":settings.swing_timeframe,"min_confidence":settings.swing_min_confidence,"max_positions":settings.max_swing_positions,"model_ready":engine.ready("SWING"),"analysis":["5m","15m","1h","4h"]}},"sides":["LONG","SHORT"],"time_based_exit":False,"dynamic_exit":True}
+    return {"name":"TradeBot AI Long/Short Trader","version":"1.3.0","paper_trading":settings.paper_trading,"ui":"/index.html","execution":execution.get(),"demo":demo.status(),"demo_scan":demo_scan_state,"data":{"directory":settings.data_dir,"database":str(store.db_path),"collector_interval_seconds":settings.collector_interval_seconds},"modes":{"SCALP":{"timeframe":settings.scalping_timeframe,"min_confidence":settings.scalp_min_confidence,"max_positions":settings.max_scalp_positions,"model_ready":engine.ready("SCALP"),"analysis":["1m","5m","15m","1h","4h"]},"SWING":{"timeframe":settings.swing_timeframe,"min_confidence":settings.swing_min_confidence,"max_positions":settings.max_swing_positions,"model_ready":engine.ready("SWING"),"analysis":["5m","15m","1h","4h"]}},"sides":["LONG","SHORT"],"time_based_exit":False,"dynamic_exit":True}
 
 
 @app.get("/health")
 def health():
-    return {"status":"ok","paper_trading":settings.paper_trading,"collector_running":collector.running,"position_monitor":monitor_task is not None,"demo_running":demo.enabled,"execution_mode":execution.get()["mode"],"database":str(store.db_path)}
+    return {"status":"ok","paper_trading":settings.paper_trading,"collector_running":collector.running,"position_monitor":monitor_task is not None,"demo_running":demo.enabled,"execution_mode":execution.get()["mode"],"demo_scan":demo_scan_state,"database":str(store.db_path)}
 
 
 @app.get("/execution")
@@ -156,6 +181,8 @@ def execution_config(payload: ExecutionConfig):
         if demo_task:
             demo_task.cancel()
             demo_task = None
+    elif demo.enabled and (demo_task is None or demo_task.done()):
+        demo_task = asyncio.create_task(demo_loop())
     return result
 
 
@@ -187,7 +214,12 @@ async def collect_now():
 
 
 @app.get("/demo/status")
-def demo_status(): return demo.status()
+def demo_status():
+    return demo.status()
+
+@app.get("/demo/scan")
+def demo_scan_status():
+    return demo_scan_state
 
 @app.get("/demo/positions")
 def demo_positions(): return {"items":demo.open_positions()}
@@ -236,7 +268,7 @@ async def market_overview():
 
 async def _scan_mode(mode:str,persist:bool=True):
     mode=mode.upper(); timeframe,min_confidence,_,enabled=mode_config(mode)
-    if not enabled: return {"mode":mode,"enabled":False,"timeframe":timeframe,"scanned":0,"qualified":0,"setups":[]}
+    if not enabled: return {"mode":mode,"enabled":False,"timeframe":timeframe,"scanned":0,"qualified":0,"rejected":0,"errors":0,"setups":[]}
     results=[]; scanned=0; rejected=0; errors=0
     for symbol in settings.symbol_list:
         try:
