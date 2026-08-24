@@ -24,17 +24,15 @@ broker = PaperBroker(settings.starting_equity)
 monitor_task: asyncio.Task | None = None
 
 
-def static_web_dir() -> Path:
-    """Return the web asset directory for both source and PyInstaller builds."""
+def web_directory() -> str:
     if getattr(sys, "frozen", False):
         base = Path(getattr(sys, "_MEIPASS", Path(sys.executable).resolve().parent))
-        candidate = base / "web"
     else:
-        candidate = Path(__file__).resolve().parent.parent / "web"
-
+        base = Path(__file__).resolve().parent.parent
+    candidate = base / "web"
     if not candidate.is_dir():
-        raise RuntimeError(f"TradeBot web assets not found: {candidate}")
-    return candidate
+        raise RuntimeError(f"TradeBot UI-Verzeichnis fehlt: {candidate}")
+    return str(candidate)
 
 
 async def monitor_positions() -> None:
@@ -46,12 +44,7 @@ async def monitor_positions() -> None:
                     continue
                 candle = df.iloc[-1]
                 before = position.status
-                updated = broker.mark_candle(
-                    position.id,
-                    float(candle.high),
-                    float(candle.low),
-                    float(candle.close),
-                )
+                updated = broker.mark_candle(position.id, float(candle.high), float(candle.low), float(candle.close))
                 if before == "OPEN" and updated.status == "CLOSED":
                     send_push(
                         f"Trade geschlossen · {updated.side} {updated.symbol}",
@@ -79,7 +72,7 @@ async def lifespan(app: FastAPI):
     await collector.stop()
 
 
-app = FastAPI(title="TradeBot AI Long/Short Trader", version="1.0.1", lifespan=lifespan)
+app = FastAPI(title="TradeBot AI Long/Short Trader", version="1.0.0", lifespan=lifespan)
 app.include_router(notification_router)
 
 
@@ -107,11 +100,10 @@ async def analyze_symbol(symbol: str, mode: str):
 def root():
     return {
         "name": "TradeBot AI Long/Short Trader",
-        "version": "1.0.1",
+        "version": "1.0.0",
         "paper_trading": settings.paper_trading,
         "ui": "/index.html",
         "notifications": "/notifications/config",
-        "web_assets": str(static_web_dir()),
         "data": {
             "directory": settings.data_dir,
             "database": str(store.db_path),
@@ -146,7 +138,7 @@ def health():
         "paper_trading": settings.paper_trading,
         "collector_running": collector.running,
         "position_monitor": monitor_task is not None,
-        "web_assets": str(static_web_dir()),
+        "database": str(store.db_path),
     }
 
 
@@ -176,6 +168,11 @@ def data_stats():
 @app.get("/data/analyses")
 def data_analyses(limit: int = 50):
     return {"items": store.recent_analyses(limit)}
+
+
+@app.get("/data/training")
+def data_training(limit: int = 10000):
+    return {"items": store.training_rows(limit), "count": len(store.training_rows(limit))}
 
 
 @app.post("/data/collect-now")
@@ -212,14 +209,7 @@ async def _scan_mode(mode: str):
     mode = mode.upper()
     timeframe, min_confidence, _, enabled = mode_config(mode)
     if not enabled:
-        return {
-            "mode": mode,
-            "enabled": False,
-            "timeframe": timeframe,
-            "scanned": 0,
-            "qualified": 0,
-            "setups": [],
-        }
+        return {"mode": mode, "enabled": False, "timeframe": timeframe, "scanned": 0, "qualified": 0, "setups": []}
 
     results = []
     scanned = 0
@@ -234,14 +224,11 @@ async def _scan_mode(mode: str):
                 score_short_setup(symbol, df, mode, timeframe, contexts),
             ]
             for setup in setups:
-                if setup is None:
+                if setup is None or setup.confidence < min_confidence:
                     rejected += 1
                     continue
-                if setup.confidence >= min_confidence:
-                    results.append(setup)
-                    store.save_analysis(setup)
-                else:
-                    rejected += 1
+                results.append(setup)
+                store.save_analysis(setup)
         except Exception:
             errors += 1
     results.sort(key=lambda x: (x.probability, x.expected_value_r), reverse=True)
@@ -270,7 +257,6 @@ async def scan_all_modes():
     all_setups = scalp["setups"] + swing["setups"]
     all_setups.sort(key=lambda x: (x.probability, x.expected_value_r), reverse=True)
     return {
-        "generated_at": asyncio.get_running_loop().time(),
         "SCALP": scalp,
         "SWING": swing,
         "setups": all_setups,
@@ -280,9 +266,7 @@ async def scan_all_modes():
 
 @app.post("/trade/{mode}/{side}/{symbol}")
 async def auto_paper_trade(mode: str, side: str, symbol: str):
-    mode = mode.upper()
-    side = side.upper()
-    symbol = symbol.upper()
+    mode = mode.upper(); side = side.upper(); symbol = symbol.upper()
     timeframe, min_confidence, max_positions, enabled = mode_config(mode)
     if not enabled:
         raise HTTPException(status_code=409, detail=f"{mode} mode is disabled")
@@ -300,22 +284,13 @@ async def auto_paper_trade(mode: str, side: str, symbol: str):
     if len(broker.open_positions(mode)) >= max_positions:
         raise HTTPException(status_code=409, detail=f"maximum {mode.lower()} positions reached")
 
-    decision = size_position(
-        equity=broker.equity,
-        setup=setup,
-        open_positions=len(broker.open_positions()),
-        daily_pnl=broker.realized_pnl,
-    )
+    decision = size_position(equity=broker.equity, setup=setup, open_positions=len(broker.open_positions()), daily_pnl=broker.realized_pnl)
     if not decision.allowed:
         raise HTTPException(status_code=409, detail=decision.reason)
 
     position = broker.open_position(setup, decision.quantity)
     store.save_analysis(setup)
-    send_push(
-        f"Paper Trade · {mode} {side}",
-        f"{symbol} eröffnet · P={setup.probability:.1%} · EV {setup.expected_value_r:+.2f}R · TP1 {setup.take_profit_1} · TP2 {setup.take_profit_2}",
-        "/index.html",
-    )
+    send_push(f"Paper Trade · {mode} {side}", f"{symbol} eröffnet · P={setup.probability:.1%} · EV {setup.expected_value_r:+.2f}R · TP1 {setup.take_profit_1} · TP2 {setup.take_profit_2}", "/index.html")
     return {
         "setup": setup,
         "risk": decision,
@@ -327,11 +302,7 @@ async def auto_paper_trade(mode: str, side: str, symbol: str):
 
 @app.get("/positions")
 def positions():
-    return {
-        "equity": broker.equity,
-        "realized_pnl": broker.realized_pnl,
-        "positions": broker.open_positions(),
-    }
+    return {"equity": broker.equity, "realized_pnl": broker.realized_pnl, "positions": broker.open_positions()}
 
 
-app.mount("/", StaticFiles(directory=static_web_dir(), html=True), name="web")
+app.mount("/", StaticFiles(directory=web_directory(), html=True), name="web")
