@@ -222,10 +222,12 @@ def demo_scan_status():
     return demo_scan_state
 
 @app.get("/demo/positions")
-def demo_positions(): return {"items":demo.open_positions()}
+def demo_positions():
+    return {"items":demo.open_positions()}
 
 @app.get("/demo/trades")
-def demo_trades(limit:int=100): return {"items":demo.trades(limit)}
+def demo_trades(limit:int=100):
+    return {"items":demo.journal(limit)}
 
 @app.post("/demo/config")
 def demo_config(payload:DemoConfig):
