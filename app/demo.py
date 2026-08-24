@@ -49,7 +49,6 @@ class DemoEngine:
                     "INSERT INTO demo_account(id,starting_budget,equity,risk_per_trade,max_positions,enabled,updated_at) VALUES(1,10000,10000,0.005,5,0,?)",
                     (self._now(),),
                 )
-            conn.commit()
 
     @staticmethod
     def _now() -> str:
@@ -100,7 +99,10 @@ class DemoEngine:
                 return False
             if conn.execute("SELECT COUNT(*) FROM demo_positions WHERE status='OPEN'").fetchone()[0] >= account["max_positions"]:
                 return False
-            if conn.execute("SELECT 1 FROM demo_positions WHERE status='OPEN' AND symbol=? AND side=? AND mode=?", (setup.symbol, setup.side, setup.mode)).fetchone():
+            if conn.execute(
+                "SELECT 1 FROM demo_positions WHERE status='OPEN' AND symbol=? AND side=? AND mode=?",
+                (setup.symbol, setup.side, setup.mode),
+            ).fetchone():
                 return False
             distance = abs(float(setup.entry) - float(setup.stop_loss))
             if distance <= 0:
@@ -113,7 +115,8 @@ class DemoEngine:
             trail_distance = distance * (0.8 if setup.mode == "SCALP" else 1.0)
             conn.execute(
                 "INSERT INTO demo_positions(id,symbol,side,mode,timeframe,entry,stop_loss,tp1,tp2,trailing_stop,trail_distance,quantity,opened_at,status) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?, 'OPEN')",
-                (str(uuid.uuid4()), setup.symbol, setup.side, setup.mode, setup.timeframe, setup.entry, setup.stop_loss, setup.take_profit_1, setup.take_profit_2, setup.trailing_stop, trail_distance, quantity, self._now()),
+                (str(uuid.uuid4()), setup.symbol, setup.side, setup.mode, setup.timeframe, setup.entry, setup.stop_loss,
+                 setup.take_profit_1, setup.take_profit_2, setup.trailing_stop, trail_distance, quantity, self._now()),
             )
             conn.commit()
             return True
@@ -169,7 +172,10 @@ class DemoEngine:
                     exit_price, reason = stop, ("TRAILING_STOP" if tp1_hit else "INITIAL_STOP")
 
             if exit_price is None:
-                conn.execute("UPDATE demo_positions SET stop_loss=?,trailing_stop=?,tp1_hit=? WHERE id=?", (stop, trailing, int(tp1_hit), row["id"]))
+                conn.execute(
+                    "UPDATE demo_positions SET stop_loss=?,trailing_stop=?,tp1_hit=? WHERE id=?",
+                    (stop, trailing, int(tp1_hit), row["id"]),
+                )
                 conn.commit()
                 return
 
@@ -179,8 +185,14 @@ class DemoEngine:
             signed_r = ((exit_price - entry) if side == "LONG" else (entry - exit_price)) / risk_distance if risk_distance else 0.0
             result = "WIN" if pnl > 0 else "LOSS"
             now = self._now()
-            conn.execute("UPDATE demo_positions SET status='CLOSED',closed_at=?,exit_price=?,pnl=?,exit_reason=?,stop_loss=?,trailing_stop=?,tp1_hit=? WHERE id=?", (now, exit_price, pnl, reason, stop, trailing, int(tp1_hit), row["id"]))
-            conn.execute("INSERT INTO demo_trades(position_id,closed_at,symbol,side,mode,pnl,result,entry,exit_price,risk_r) VALUES(?,?,?,?,?,?,?,?,?,?)", (row["id"], now, row["symbol"], side, row["mode"], pnl, result, entry, exit_price, signed_r))
+            conn.execute(
+                "UPDATE demo_positions SET status='CLOSED',closed_at=?,exit_price=?,pnl=?,exit_reason=?,stop_loss=?,trailing_stop=?,tp1_hit=? WHERE id=?",
+                (now, exit_price, pnl, reason, stop, trailing, int(tp1_hit), row["id"]),
+            )
+            conn.execute(
+                "INSERT INTO demo_trades(position_id,closed_at,symbol,side,mode,pnl,result,entry,exit_price,risk_r) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (row["id"], now, row["symbol"], side, row["mode"], pnl, result, entry, exit_price, signed_r),
+            )
             conn.execute("UPDATE demo_account SET equity=equity+?,updated_at=? WHERE id=1", (pnl, now))
             conn.commit()
 
@@ -212,3 +224,33 @@ class DemoEngine:
     def trades(self, limit: int = 100) -> list[dict[str, Any]]:
         with self.lock, self._connect() as conn:
             return [dict(r) for r in conn.execute("SELECT * FROM demo_trades ORDER BY id DESC LIMIT ?", (max(1, min(limit, 500)),)).fetchall()]
+
+    def journal(self, limit: int = 100) -> list[dict[str, Any]]:
+        """Return open and closed demo trades as one live journal."""
+        limit = max(1, min(limit, 500))
+        with self.lock, self._connect() as conn:
+            open_rows = conn.execute(
+                """
+                SELECT
+                    id AS position_id, opened_at AS opened_at, NULL AS closed_at,
+                    symbol, side, mode, entry, NULL AS exit_price, NULL AS pnl,
+                    'OPEN' AS status, NULL AS result, NULL AS risk_r, exit_reason,
+                    stop_loss, tp1, tp2, trailing_stop, quantity, timeframe
+                FROM demo_positions
+                WHERE status='OPEN'
+                """
+            ).fetchall()
+            closed_rows = conn.execute(
+                """
+                SELECT
+                    position_id, NULL AS opened_at, closed_at,
+                    symbol, side, mode, entry, exit_price, pnl,
+                    'CLOSED' AS status, result, risk_r, NULL AS exit_reason,
+                    NULL AS stop_loss, NULL AS tp1, NULL AS tp2, NULL AS trailing_stop,
+                    NULL AS quantity, NULL AS timeframe
+                FROM demo_trades
+                """
+            ).fetchall()
+            items = [dict(r) for r in [*open_rows, *closed_rows]]
+            items.sort(key=lambda x: x.get("closed_at") or x.get("opened_at") or "", reverse=True)
+            return items[:limit]
