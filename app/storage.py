@@ -311,6 +311,8 @@ class TradeDataStore:
             return {
                 "candles": int(conn.execute("SELECT COUNT(*) FROM market_snapshots").fetchone()[0]),
                 "analyses": int(conn.execute("SELECT COUNT(*) FROM analysis_snapshots").fetchone()[0]),
+                "legacy_analyses": int(conn.execute("SELECT COUNT(*) FROM analysis_snapshots WHERE source_open_time IS NULL").fetchone()[0]),
+                "training_examples": int(conn.execute("SELECT COUNT(*) FROM analysis_snapshots a JOIN outcome_tracking o ON o.analysis_id=a.id WHERE a.source_open_time IS NOT NULL AND o.status='RESOLVED' AND o.pnl_r IS NOT NULL").fetchone()[0]),
                 "open_outcomes": int(conn.execute("SELECT COUNT(*) FROM outcome_tracking WHERE status='OPEN'").fetchone()[0]),
                 "resolved_outcomes": total,
                 "positive_outcomes": positive,
@@ -347,7 +349,7 @@ class TradeDataStore:
                        o.max_adverse_r, o.candles_observed
                 FROM analysis_snapshots a
                 JOIN outcome_tracking o ON o.analysis_id=a.id
-                WHERE o.status='RESOLVED' AND o.pnl_r IS NOT NULL
+                WHERE a.source_open_time IS NOT NULL AND o.status='RESOLVED' AND o.pnl_r IS NOT NULL
                 ORDER BY a.id DESC LIMIT ?
                 """,
                 (max(1, min(limit, 100000)),),
