@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import asyncio
 
-from .config import settings
+from .features import latest_features
 from .multi_timeframe import fetch_contexts
-from .storage import TradeDataStore
+from .storage import store
 from .strategy import score_long_setup, score_short_setup
 
 
@@ -12,7 +12,7 @@ class LiveCollector:
     def __init__(self) -> None:
         self.running = False
         self.task: asyncio.Task | None = None
-        self.store = TradeDataStore(settings.data_dir)
+        self.store = store
 
     async def collect_mode(self, mode: str) -> dict[str, int]:
         mode = mode.upper()
@@ -27,28 +27,40 @@ class LiveCollector:
                 df = raw.get(timeframe)
                 if df is None:
                     continue
-                primary_rows = [
-                    {"open_time": row.open_time.isoformat(), "open": float(row.open), "high": float(row.high), "low": float(row.low), "close": float(row.close), "volume": float(row.volume)}
-                    for row in df.tail(min(len(df), 100)).itertuples(index=False)
-                ]
-                saved_candles += self.store.save_candles(symbol, mode, timeframe, primary_rows)
 
-                for setup in (
+                # Store every timeframe used by the analysis, not only the primary one.
+                for tf, frame in raw.items():
+                    rows = [
+                        {
+                            "open_time": row.open_time.isoformat(),
+                            "open": float(row.open),
+                            "high": float(row.high),
+                            "low": float(row.low),
+                            "close": float(row.close),
+                            "volume": float(row.volume),
+                        }
+                        for row in frame.tail(min(len(frame), 250)).itertuples(index=False)
+                    ]
+                    saved_candles += self.store.save_candles(symbol, mode, tf, rows)
+
+                threshold = settings.scalp_min_confidence if mode == "SCALP" else settings.swing_min_confidence
+                setups = (
                     score_long_setup(symbol, df, mode, timeframe, contexts),
                     score_short_setup(symbol, df, mode, timeframe, contexts),
-                ):
-                    if setup is None:
+                )
+                for setup in setups:
+                    if setup is None or setup.confidence < threshold:
                         continue
-                    threshold = settings.scalp_min_confidence if mode == "SCALP" else settings.swing_min_confidence
-                    if setup.confidence >= threshold:
-                        self.store.save_analysis(setup)
-                        saved_analyses += 1
+                    features = latest_features(df, setup.side)
+                    feature_dict = {} if features is None else {k: float(v) for k, v in features.to_dict().items()}
+                    _, inserted = self.store.save_analysis(setup, feature_dict)
+                    saved_analyses += int(inserted)
 
                 resolved += self.store.resolve_open_outcomes(symbol, mode, timeframe)
             except Exception:
                 continue
 
-        return {"candles": saved_candles, "analyses": saved_analyses, "resolved": resolved}
+        return {"candles": saved_candles, "analyses_new": saved_analyses, "resolved": resolved}
 
     async def run_forever(self) -> None:
         self.running = True
@@ -72,5 +84,7 @@ class LiveCollector:
                 pass
             self.task = None
 
+
+from .config import settings
 
 collector = LiveCollector()
