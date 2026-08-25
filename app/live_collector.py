@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import time
 
 from .features import latest_features
+from .github_sync import sync_analysis_archive
 from .storage import store
 from .strategy import score_long_setup, score_short_setup
 
@@ -12,6 +14,7 @@ class LiveCollector:
         self.running = False
         self.task: asyncio.Task | None = None
         self.store = store
+        self.last_github_sync = 0.0
 
     async def _collect_symbol(self, mode: str, symbol: str) -> dict[str, int]:
         timeframe = settings.scalping_timeframe if mode == "SCALP" else settings.swing_timeframe
@@ -74,12 +77,21 @@ class LiveCollector:
                 self.collect_mode("SCALP"),
                 self.collect_mode("SWING"),
             )
+
+            now = time.monotonic()
+            if settings.github_sync_enabled and settings.github_sync_token and now - self.last_github_sync >= settings.github_sync_interval_seconds:
+                try:
+                    await asyncio.to_thread(sync_analysis_archive)
+                except Exception:
+                    pass
+                self.last_github_sync = now
+
             await asyncio.sleep(settings.collector_interval_seconds)
 
     def start(self) -> None:
         if self.task and not self.task.done():
             return
-        self.task = asyncio.create_task(self.run_forever())
+        self.task = asyncio.create_task(self.run_forever(), name="tradenex-live-collector")
 
     async def stop(self) -> None:
         self.running = False
