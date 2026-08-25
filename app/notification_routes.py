@@ -30,6 +30,7 @@ class SettingsPayload(BaseModel):
     swing_enabled: bool = True
     new_setups: bool = True
     new_trades: bool = True
+    auto_scan_enabled: bool = True
     risk_per_trade: float = Field(default=0.005, ge=0.001, le=0.03)
     max_daily_loss: float = Field(default=0.02, ge=0.001, le=0.2)
     scalp_sl_atr: float = Field(default=0.75, ge=0.1, le=10.0)
@@ -59,6 +60,7 @@ class ControlStore:
                     swing_enabled INTEGER NOT NULL DEFAULT 1,
                     new_setups INTEGER NOT NULL DEFAULT 1,
                     new_trades INTEGER NOT NULL DEFAULT 1,
+                    auto_scan_enabled INTEGER NOT NULL DEFAULT 1,
                     risk_per_trade REAL NOT NULL DEFAULT 0.005,
                     max_daily_loss REAL NOT NULL DEFAULT 0.02,
                     scalp_sl_atr REAL NOT NULL DEFAULT 0.75,
@@ -72,6 +74,7 @@ class ControlStore:
             )
             existing = {row[1] for row in conn.execute("PRAGMA table_info(app_settings)").fetchall()}
             migrations = {
+                "auto_scan_enabled": "ALTER TABLE app_settings ADD COLUMN auto_scan_enabled INTEGER NOT NULL DEFAULT 1",
                 "scalp_sl_atr": "ALTER TABLE app_settings ADD COLUMN scalp_sl_atr REAL NOT NULL DEFAULT 0.75",
                 "scalp_tp1_rr": "ALTER TABLE app_settings ADD COLUMN scalp_tp1_rr REAL NOT NULL DEFAULT 1.8",
                 "scalp_tp2_rr": "ALTER TABLE app_settings ADD COLUMN scalp_tp2_rr REAL NOT NULL DEFAULT 2.7",
@@ -84,10 +87,10 @@ class ControlStore:
                     conn.execute(sql)
             conn.execute(
                 """INSERT OR IGNORE INTO app_settings(
-                    id,scalp_enabled,swing_enabled,new_setups,new_trades,
+                    id,scalp_enabled,swing_enabled,new_setups,new_trades,auto_scan_enabled,
                     risk_per_trade,max_daily_loss,scalp_sl_atr,scalp_tp1_rr,scalp_tp2_rr,
                     swing_sl_atr,swing_tp1_rr,swing_tp2_rr,updated_at
-                ) VALUES(1,1,1,1,1,0.005,0.02,0.75,1.8,2.7,1.35,2.2,4.0,?)""",
+                ) VALUES(1,1,1,1,1,1,0.005,0.02,0.75,1.8,2.7,1.35,2.2,4.0,?)""",
                 (datetime.now(timezone.utc).isoformat(),),
             )
             conn.commit()
@@ -100,15 +103,16 @@ class ControlStore:
                 "swing_enabled": bool(row[2]),
                 "new_setups": bool(row[3]),
                 "new_trades": bool(row[4]),
-                "risk_per_trade": float(row[5]),
-                "max_daily_loss": float(row[6]),
-                "scalp_sl_atr": float(row[7]),
-                "scalp_tp1_rr": float(row[8]),
-                "scalp_tp2_rr": float(row[9]),
-                "swing_sl_atr": float(row[10]),
-                "swing_tp1_rr": float(row[11]),
-                "swing_tp2_rr": float(row[12]),
-                "updated_at": row[13],
+                "auto_scan_enabled": bool(row[5]),
+                "risk_per_trade": float(row[6]),
+                "max_daily_loss": float(row[7]),
+                "scalp_sl_atr": float(row[8]),
+                "scalp_tp1_rr": float(row[9]),
+                "scalp_tp2_rr": float(row[10]),
+                "swing_sl_atr": float(row[11]),
+                "swing_tp1_rr": float(row[12]),
+                "swing_tp2_rr": float(row[13]),
+                "updated_at": row[14],
             }
 
     @staticmethod
@@ -129,13 +133,13 @@ class ControlStore:
         with sqlite3.connect(store.db_path) as conn:
             conn.execute(
                 """UPDATE app_settings SET
-                    scalp_enabled=?,swing_enabled=?,new_setups=?,new_trades=?,
+                    scalp_enabled=?,swing_enabled=?,new_setups=?,new_trades=?,auto_scan_enabled=?,
                     risk_per_trade=?,max_daily_loss=?,
                     scalp_sl_atr=?,scalp_tp1_rr=?,scalp_tp2_rr=?,
                     swing_sl_atr=?,swing_tp1_rr=?,swing_tp2_rr=?,updated_at=?
                     WHERE id=1""",
                 (
-                    int(p.scalp_enabled), int(p.swing_enabled), int(p.new_setups), int(p.new_trades),
+                    int(p.scalp_enabled), int(p.swing_enabled), int(p.new_setups), int(p.new_trades), int(p.auto_scan_enabled),
                     p.risk_per_trade, p.max_daily_loss,
                     p.scalp_sl_atr, p.scalp_tp1_rr, p.scalp_tp2_rr,
                     p.swing_sl_atr, p.swing_tp1_rr, p.swing_tp2_rr, now,
