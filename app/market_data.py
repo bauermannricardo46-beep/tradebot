@@ -1,19 +1,55 @@
 from __future__ import annotations
 
+import asyncio
+import time
+from typing import Final
+
 import httpx
 import pandas as pd
 
+BINANCE_KLINES: Final = "https://api.binance.com/api/v3/klines"
 
-BINANCE_KLINES = "https://api.binance.com/api/v3/klines"
+# REST cache TTLs keep the UI/collector responsive without hammering Binance.
+CACHE_TTL: Final[dict[str, float]] = {
+    "1m": 2.0,
+    "5m": 5.0,
+    "15m": 15.0,
+    "1h": 30.0,
+    "4h": 60.0,
+}
+
+_client: httpx.AsyncClient | None = None
+_client_lock = asyncio.Lock()
+_request_sem = asyncio.Semaphore(8)
+_cache: dict[tuple[str, str, int], tuple[float, pd.DataFrame]] = {}
+_cache_lock = asyncio.Lock()
 
 
-async def fetch_klines(symbol: str, interval: str, limit: int = 200) -> pd.DataFrame:
-    params = {"symbol": symbol.upper(), "interval": interval, "limit": limit}
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        response = await client.get(BINANCE_KLINES, params=params)
-        response.raise_for_status()
-        rows = response.json()
+async def _get_client() -> httpx.AsyncClient:
+    global _client
+    async with _client_lock:
+        if _client is None or _client.is_closed:
+            _client = httpx.AsyncClient(
+                timeout=httpx.Timeout(8.0, connect=3.0),
+                limits=httpx.Limits(max_connections=16, max_keepalive_connections=16),
+                http2=True,
+            )
+        return _client
 
+
+async def close_market_data() -> None:
+    global _client
+    async with _client_lock:
+        if _client is not None and not _client.is_closed:
+            await _client.aclose()
+        _client = None
+
+
+def _cache_ttl(interval: str) -> float:
+    return CACHE_TTL.get(interval, 5.0)
+
+
+def _build_frame(rows: list[list]) -> pd.DataFrame:
     columns = [
         "open_time", "open", "high", "low", "close", "volume",
         "close_time", "quote_volume", "trades", "taker_base", "taker_quote", "ignore",
@@ -22,4 +58,25 @@ async def fetch_klines(symbol: str, interval: str, limit: int = 200) -> pd.DataF
     for col in ["open", "high", "low", "close", "volume"]:
         df[col] = pd.to_numeric(df[col], errors="coerce")
     df["open_time"] = pd.to_datetime(df["open_time"], unit="ms", utc=True)
-    return df[["open_time", "open", "high", "low", "close", "volume"]].dropna()
+    return df[["open_time", "open", "high", "low", "close", "volume"]].dropna().reset_index(drop=True)
+
+
+async def fetch_klines(symbol: str, interval: str, limit: int = 200) -> pd.DataFrame:
+    key = (symbol.upper(), interval, int(limit))
+    now = time.monotonic()
+    ttl = _cache_ttl(interval)
+    async with _cache_lock:
+        cached = _cache.get(key)
+        if cached and now - cached[0] < ttl:
+            return cached[1].copy(deep=True)
+
+    params = {"symbol": symbol.upper(), "interval": interval, "limit": limit}
+    client = await _get_client()
+    async with _request_sem:
+        response = await client.get(BINANCE_KLINES, params=params)
+        response.raise_for_status()
+        frame = _build_frame(response.json())
+
+    async with _cache_lock:
+        _cache[key] = (time.monotonic(), frame)
+    return frame.copy(deep=True)
