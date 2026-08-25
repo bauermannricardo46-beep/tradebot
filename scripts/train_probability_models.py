@@ -19,8 +19,8 @@ from app.features import FEATURES, feature_frame
 
 BINANCE = "https://api.binance.com/api/v3/klines"
 MODE_CONFIG = {
-    "SCALP": {"interval": "5m", "atr_mult": 1.0, "min_pct": 0.0025},
-    "SWING": {"interval": "1h", "atr_mult": 1.8, "min_pct": 0.006},
+    "SCALP": {"interval": "5m", "atr_mult": 1.0, "min_pct": 0.0025, "lookahead_bars": 120},
+    "SWING": {"interval": "1h", "atr_mult": 1.8, "min_pct": 0.006, "lookahead_bars": 360},
 }
 
 
@@ -63,9 +63,8 @@ def outcome_labels(df: pd.DataFrame, side: str, mode: str) -> pd.Series:
     distance = np.maximum(atr * cfg["atr_mult"], work["close"] * cfg["min_pct"])
     labels = pd.Series(np.nan, index=work.index, dtype=float)
 
-    # This look-ahead exists only to define a supervised training target.
-    # It is NOT a maximum holding time for live trading.
-    max_lookahead = min(500, max(100, len(work) // 4))
+    # Training-only look-ahead. Live trades remain time-independent.
+    max_lookahead = min(cfg["lookahead_bars"], max(100, len(work) // 4))
     for i in range(len(work) - max_lookahead):
         entry = float(work.loc[i, "close"])
         stop = entry - float(distance.iloc[i]) if side == "LONG" else entry + float(distance.iloc[i])
@@ -80,7 +79,6 @@ def outcome_labels(df: pd.DataFrame, side: str, mode: str) -> pd.Series:
                 hit_stop = hi >= stop
                 hit_target = lo <= target
             if hit_stop and hit_target:
-                # Conservative tie-break: assume stop was hit first.
                 labels.iloc[i] = 0
                 break
             if hit_target:
@@ -134,7 +132,6 @@ def train_mode(x: pd.DataFrame, y: pd.Series, mode: str, out_dir: Path) -> dict:
     p_boost = boosting.predict_proba(x_test)[:, 1]
     raw = (p_log + p_boost) / 2
 
-    # Platt calibration on a time-later slice of the validation data.
     cal_split = max(20, int(len(raw) * 0.5))
     calibrator = LogisticRegression(max_iter=1000)
     calibrator.fit(raw[:cal_split].reshape(-1, 1), y_test.iloc[:cal_split])
@@ -162,8 +159,9 @@ def train_mode(x: pd.DataFrame, y: pd.Series, mode: str, out_dir: Path) -> dict:
     )
 
     pack = {
-        "version": "ensemble-v1",
+        "version": f"{mode.lower()}-ensemble-v2",
         "mode": mode,
+        "profile": "micro-momentum-breakout" if mode == "SCALP" else "structure-trend-swing",
         "logistic": logistic,
         "boosting": boosting,
         "calibrator": calibrator,
