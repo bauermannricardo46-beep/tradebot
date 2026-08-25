@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 
 import pandas as pd
@@ -31,14 +32,17 @@ def context(df: pd.DataFrame, timeframe: str) -> TimeframeContext:
 
 async def fetch_contexts(symbol: str, mode: str, limit: int = 250) -> tuple[dict[str, TimeframeContext], dict[str, pd.DataFrame]]:
     frames = ["1m", "5m", "15m", "1h", "4h"] if mode.upper() == "SCALP" else ["5m", "15m", "1h", "4h"]
+    results = await asyncio.gather(
+        *(fetch_klines(symbol, tf, limit) for tf in frames),
+        return_exceptions=True,
+    )
     contexts: dict[str, TimeframeContext] = {}
     raw: dict[str, pd.DataFrame] = {}
-    for tf in frames:
-        df = await fetch_klines(symbol, tf, limit)
-        if len(df) < 60:
+    for tf, result in zip(frames, results):
+        if isinstance(result, Exception) or not isinstance(result, pd.DataFrame) or len(result) < 60:
             continue
-        raw[tf] = df
-        contexts[tf] = context(df, tf)
+        raw[tf] = result
+        contexts[tf] = context(result, tf)
     return contexts, raw
 
 
