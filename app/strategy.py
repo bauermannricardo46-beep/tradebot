@@ -149,22 +149,22 @@ def score_setup(symbol: str, df: pd.DataFrame, side: str, mode: str, timeframe: 
     rule_score, reasons = (_scalp_score(r, side) if mode == "SCALP" else _swing_score(r, side))
     alignment = trend_alignment(contexts, side) if contexts else 0.5
     reasons.append(f"Multi-Timeframe Alignment {alignment:.0%}")
-    alignment_min = 0.60 if mode == "SCALP" else 0.75
+    alignment_min = 0.50 if mode == "SCALP" else 0.75
     alignment_bonus = 10 if mode == "SCALP" else 8
     if alignment >= alignment_min:
         rule_score = min(100, rule_score + alignment_bonus)
-    elif alignment < (0.45 if mode == "SCALP" else 0.50):
+    elif alignment < (0.40 if mode == "SCALP" else 0.50):
         rule_score = max(0, rule_score - 10)
 
     fib382, fib500, fib618, fib786 = _fib_levels(swing_low, swing_high)
     price = float(r.close)
     nearest_fib = min((fib382, fib500, fib618, fib786), key=lambda x: abs(x - price))
-    fib_distance_limit = 0.015 if mode == "SCALP" else 0.022
+    fib_distance_limit = 0.018 if mode == "SCALP" else 0.022
     if abs(nearest_fib - price) / price < fib_distance_limit:
         rule_score = min(100, rule_score + (4 if mode == "SCALP" else 7))
         reasons.append(f"Fib-Confluence ({'kurzfristig' if mode == 'SCALP' else 'strukturell'})")
 
-    min_rr = 1.20 if mode == "SCALP" else 1.80
+    min_rr = 1.00 if mode == "SCALP" else 1.80
     if rr < min_rr:
         return None
 
@@ -173,8 +173,8 @@ def score_setup(symbol: str, df: pd.DataFrame, side: str, mode: str, timeframe: 
         confidence = probability_confidence(prob.probability, True)
         reasons.append(f"kalibrierte {mode}-Modellwahrscheinlichkeit {prob.probability * 100:.1f}%")
         reasons.append(f"Expected Value {prob.expected_value_r:+.2f}R")
-        ev_floor = 0.05 if mode == "SCALP" else 0.10
-        if rule_score < (40 if mode == "SCALP" else 50) or prob.expected_value_r <= ev_floor or alignment < alignment_min:
+        ev_floor = 0.02 if mode == "SCALP" else 0.10
+        if rule_score < (35 if mode == "SCALP" else 50) or prob.expected_value_r <= ev_floor or alignment < alignment_min:
             return None
     else:
         confidence = rule_score
