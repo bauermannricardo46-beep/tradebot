@@ -33,7 +33,7 @@ class DemoEngine:
                     equity REAL NOT NULL,
                     risk_per_trade REAL NOT NULL DEFAULT 0.005,
                     max_positions INTEGER NOT NULL DEFAULT 5,
-                    enabled INTEGER NOT NULL DEFAULT 0,
+                    enabled INTEGER NOT NULL DEFAULT 1,
                     updated_at TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS demo_positions (
@@ -74,9 +74,14 @@ class DemoEngine:
             )
             if conn.execute("SELECT id FROM demo_account WHERE id=1").fetchone() is None:
                 conn.execute(
-                    "INSERT INTO demo_account(id,starting_budget,equity,risk_per_trade,max_positions,enabled,updated_at) VALUES(1,10000,10000,0.005,5,0,?)",
+                    "INSERT INTO demo_account(id,starting_budget,equity,risk_per_trade,max_positions,enabled,updated_at) VALUES(1,10000,10000,0.005,5,1,?)",
                     (self._now(),),
                 )
+            else:
+                # Preserve an explicit user stop; only repair legacy rows that have never been used.
+                row = conn.execute("SELECT enabled FROM demo_account WHERE id=1").fetchone()
+                if row is not None and row[0] is None:
+                    conn.execute("UPDATE demo_account SET enabled=1,updated_at=? WHERE id=1", (self._now(),))
             conn.commit()
 
     @staticmethod
