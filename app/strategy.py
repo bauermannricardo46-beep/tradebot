@@ -18,10 +18,8 @@ def _build_levels(entry: float, atr: float, side: str, mode: str, swing_low: flo
     if mode=="SCALP": sl_atr,tp1_rr,tp2_rr,min_buffer_pct,trail_fraction=settings.scalp_sl_atr_multiplier,settings.scalp_tp1_rr,settings.scalp_tp2_rr,0.0018,0.35
     else: sl_atr,tp1_rr,tp2_rr,min_buffer_pct,trail_fraction=settings.swing_sl_atr_multiplier,settings.swing_tp1_rr,settings.swing_tp2_rr,0.0045,0.15
     buffer=max(atr*sl_atr,entry*min_buffer_pct)
-    if side=="LONG":
-        stop=min(swing_low-buffer,entry-buffer); risk=abs(entry-stop); tp1=entry+risk*tp1_rr; tp2=entry+risk*tp2_rr; trailing=entry+buffer*trail_fraction
-    else:
-        stop=max(swing_high+buffer,entry+buffer); risk=abs(stop-entry); tp1=entry-risk*tp1_rr; tp2=entry-risk*tp2_rr; trailing=entry-buffer*trail_fraction
+    if side=="LONG": stop=min(swing_low-buffer,entry-buffer); risk=abs(entry-stop); tp1=entry+risk*tp1_rr; tp2=entry+risk*tp2_rr; trailing=entry+buffer*trail_fraction
+    else: stop=max(swing_high+buffer,entry+buffer); risk=abs(stop-entry); tp1=entry-risk*tp1_rr; tp2=entry-risk*tp2_rr; trailing=entry-buffer*trail_fraction
     return stop,tp1,tp2,trailing
 
 
@@ -85,11 +83,14 @@ def score_setup(symbol: str, df: pd.DataFrame, side: str, mode: str, timeframe: 
         confidence=probability_confidence(prob.probability,True); reasons.append(f"kalibrierte {mode}-Modellwahrscheinlichkeit {prob.probability*100:.1f}%"); reasons.append(f"Expected Value {prob.expected_value_r:+.2f}R"); ev_floor=0.02 if mode=="SCALP" else 0.10
         if rule_score<(35 if mode=="SCALP" else 50) or prob.expected_value_r<=ev_floor or alignment<alignment_min:return None
     else:
+        # Heuristic mode is now a genuine market filter, not a confidence-label bypass.
+        # 80/82 are display thresholds only. A setup must earn its way through using
+        # live structure, momentum, MTF alignment and positive risk-adjusted EV.
         fallback_probability=max(0.01,min(0.99,rule_score/100.0)); prob=prob.__class__(fallback_probability,fallback_probability,False,prob.model_version,prob.evidence,fallback_probability*rr-(1-fallback_probability),rr)
-        # In heuristic fallback, the configured 80/82 confidence is a display/qualification floor,
-        # not an additional blocker. Core structural/EV/RR checks above still have to pass.
-        confidence=max(rule_score,settings.scalp_min_confidence if mode=="SCALP" else settings.swing_min_confidence)
-        reasons.append(f"{mode}-Modell noch nicht validiert – heuristic-fallback aktiv; Confidence-Schwelle blockiert Demo nicht")
+        heuristic_floor=60 if mode=="SCALP" else 65
+        if rule_score<heuristic_floor or alignment<alignment_min or prob.expected_value_r<=0:return None
+        confidence=rule_score
+        reasons.append(f"{mode}-Heuristik · echter Live-Marktfilter · Modell nicht erforderlich")
     if confidence<50:return None
     reasons.append(f"{mode} Profil · SL {settings.scalp_sl_atr_multiplier if mode=='SCALP' else settings.swing_sl_atr_multiplier:.2f}×ATR · TP1 {settings.scalp_tp1_rr if mode=='SCALP' else settings.swing_tp1_rr:.2f}R · TP2 {settings.scalp_tp2_rr if mode=='SCALP' else settings.swing_tp2_rr:.2f}R")
     return TradeSetup(symbol=symbol,side=side,mode=mode,timeframe=timeframe,source_open_time=pd.to_datetime(r.open_time,utc=True).to_pydatetime(),analysis_timeframes=list(contexts.keys()) if contexts else [timeframe],confidence=confidence,probability=prob.probability,expected_value_r=round(prob.expected_value_r,3),model_ready=prob.model_ready,model_version=prob.model_version,entry=round(price,8),stop_loss=round(stop,8),take_profit_1=round(tp1,8),take_profit_2=round(tp2,8),risk_reward=round(rr,2),swing_high=round(swing_high,8),swing_low=round(swing_low,8),fib_382=round(fib382,8),fib_500=round(fib500,8),fib_618=round(fib618,8),fib_786=round(fib786,8),trailing_stop=round(trailing,8),reasons=reasons)
