@@ -296,28 +296,43 @@ class DemoEngine:
             return [dict(r) for r in conn.execute("SELECT * FROM demo_trades ORDER BY id DESC LIMIT ?", (max(1, min(limit, 500)),)).fetchall()]
 
     def journal(self, limit: int = 100) -> list[dict[str, Any]]:
-        """Return open and closed demo trades as one live journal."""
+        """Return open and closed demo trades as one live journal with start and end timestamps."""
         limit = max(1, min(limit, 500))
         with self.lock, self._connect() as conn:
-            open_rows = conn.execute(
+            rows = conn.execute(
                 """
-                SELECT id AS position_id, opened_at, NULL AS closed_at,
-                       symbol, side, mode, entry, NULL AS exit_price, NULL AS pnl,
-                       'OPEN' AS status, NULL AS result, NULL AS risk_r, exit_reason,
-                       stop_loss, tp1, tp2, trailing_stop, quantity, timeframe
-                FROM demo_positions WHERE status='OPEN'
-                """
+                SELECT
+                    p.id AS position_id,
+                    p.opened_at,
+                    p.closed_at,
+                    p.symbol,
+                    p.side,
+                    p.mode,
+                    p.timeframe,
+                    p.entry,
+                    p.exit_price,
+                    p.pnl,
+                    p.status,
+                    CASE
+                        WHEN p.status='OPEN' THEN 'OPEN'
+                        WHEN p.pnl > 0 THEN 'WIN'
+                        ELSE 'LOSS'
+                    END AS result,
+                    CASE
+                        WHEN p.status='OPEN' THEN NULL
+                        ELSE t.risk_r
+                    END AS risk_r,
+                    p.exit_reason,
+                    p.stop_loss,
+                    p.tp1,
+                    p.tp2,
+                    p.trailing_stop,
+                    p.quantity
+                FROM demo_positions p
+                LEFT JOIN demo_trades t ON t.position_id = p.id
+                ORDER BY COALESCE(p.closed_at, p.opened_at) DESC
+                LIMIT ?
+                """,
+                (limit,),
             ).fetchall()
-            closed_rows = conn.execute(
-                """
-                SELECT position_id, NULL AS opened_at, closed_at,
-                       symbol, side, mode, entry, exit_price, pnl,
-                       'CLOSED' AS status, result, risk_r, NULL AS exit_reason,
-                       NULL AS stop_loss, NULL AS tp1, NULL AS tp2, NULL AS trailing_stop,
-                       NULL AS quantity, NULL AS timeframe
-                FROM demo_trades
-                """
-            ).fetchall()
-            items = [dict(r) for r in [*open_rows, *closed_rows]]
-            items.sort(key=lambda x: x.get("closed_at") or x.get("opened_at") or "", reverse=True)
-            return items[:limit]
+            return [dict(r) for r in rows]
