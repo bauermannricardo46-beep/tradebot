@@ -24,8 +24,6 @@ class Settings(BaseSettings):
     swing_risk_multiplier: float = 1.0
     scalping_enabled: bool = True
     swing_enabled: bool = True
-    # Fast control loop. Binance REST requests are cached per timeframe below,
-    # so this does not mean hammering every endpoint every two seconds.
     collector_interval_seconds: float = 2.0
 
     # Independent SCALP risk/target profile.
@@ -37,6 +35,14 @@ class Settings(BaseSettings):
     swing_sl_atr_multiplier: float = 1.35
     swing_tp1_rr: float = 2.2
     swing_tp2_rr: float = 4.0
+
+    # Optional GitHub analysis archive. Never commit the token to the repository.
+    github_sync_enabled: bool = True
+    github_sync_interval_seconds: int = 300
+    github_sync_repo: str = "bauermannricardo46-beep/tradebot"
+    github_sync_branch: str = "main"
+    github_sync_path: str = "data/analysis_archive"
+    github_sync_token: str = Field(default="", validation_alias=AliasChoices("GITHUB_SYNC_TOKEN", "TRADEBOT_GITHUB_TOKEN"))
 
     data_dir: str = Field(default="data", validation_alias=AliasChoices("DATA_DIR", "TRADEBOT_DATA_DIR"))
 
