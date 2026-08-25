@@ -30,16 +30,14 @@ def _build_levels(entry: float, atr: float, side: str, mode: str, swing_low: flo
     fib382, fib500, fib618, fib786 = _fib_levels(swing_low, swing_high)
     if side == "LONG":
         stop = min(swing_low - buffer, entry - buffer)
-        retracements = (fib382, fib500, fib618, fib786)
-        candidates = [x for x in retracements if x > entry * (1.003 if mode == "SCALP" else 1.008)]
+        candidates = [x for x in (fib382, fib500, fib618, fib786) if x > entry * (1.003 if mode == "SCALP" else 1.008)]
         tp1 = min(candidates) if candidates else entry + buffer * (1.8 if mode == "SCALP" else 2.2)
         extension = swing_high + (swing_high - swing_low) * extension_ratio
         tp2 = max(tp1, extension)
         trailing = entry + buffer * (0.35 if mode == "SCALP" else 0.15)
     else:
         stop = max(swing_high + buffer, entry + buffer)
-        retracements = (fib382, fib500, fib618, fib786)
-        candidates = [x for x in retracements if x < entry * (0.997 if mode == "SCALP" else 0.992)]
+        candidates = [x for x in (fib382, fib500, fib618, fib786) if x < entry * (0.997 if mode == "SCALP" else 0.992)]
         tp1 = max(candidates) if candidates else entry - buffer * (1.8 if mode == "SCALP" else 2.2)
         extension = swing_low - (swing_high - swing_low) * extension_ratio
         tp2 = min(tp1, extension)
@@ -105,7 +103,7 @@ def _swing_score(r: pd.Series, side: str) -> tuple[int, list[str]]:
         if r.close > r.swing_high40:
             score += 24; reasons.append("40-Candle Structure Breakout")
         elif r.close > r.open:
-            score += 6; reasons.append("bullishe Tagesstruktur")
+            score += 6; reasons.append("bullishe Swing-Struktur")
     else:
         if r.close < r.ema20 < r.ema50:
             score += 28; reasons.append("1h Trendstruktur bearish (EMA20 < EMA50)")
@@ -120,7 +118,7 @@ def _swing_score(r: pd.Series, side: str) -> tuple[int, list[str]]:
         if r.close < r.swing_low40:
             score += 24; reasons.append("40-Candle Structure Breakdown")
         elif r.close < r.open:
-            score += 6; reasons.append("bearishe Tagesstruktur")
+            score += 6; reasons.append("bearishe Swing-Struktur")
 
     if r.volume > r.vol_ma20 * 1.25:
         score += 10; reasons.append("Swing-Volumen deutlich über Durchschnitt")
@@ -128,13 +126,17 @@ def _swing_score(r: pd.Series, side: str) -> tuple[int, list[str]]:
 
 
 def score_setup(symbol: str, df: pd.DataFrame, side: str, mode: str, timeframe: str, contexts: dict[str, TimeframeContext] | None = None) -> TradeSetup | None:
-    data = add_indicators(df).dropna()
+    data = add_indicators(df).copy()
+    data["swing_high12"] = data["high"].rolling(12).max().shift(1)
+    data["swing_low12"] = data["low"].rolling(12).min().shift(1)
+    data["swing_high40"] = data["high"].rolling(40).max().shift(1)
+    data["swing_low40"] = data["low"].rolling(40).min().shift(1)
+    data = data.dropna()
     if len(data) < 140:
         return None
     r = data.iloc[-1]
     side = side.upper(); mode = mode.upper()
 
-    # Distinct structural lookbacks for the two strategies.
     structure_lookback = 30 if mode == "SCALP" else 100
     swing_high = float(data["high"].rolling(structure_lookback).max().iloc[-2])
     swing_low = float(data["low"].rolling(structure_lookback).min().iloc[-2])
@@ -212,7 +214,7 @@ def score_setup(symbol: str, df: pd.DataFrame, side: str, mode: str, timeframe: 
         fib_382=round(fib382, 8),
         fib_500=round(fib500, 8),
         fib_618=round(fib618, 8),
-        fib_786=round(fib786, 8),
+        fib_786=round(fib_786, 8),
         trailing_stop=round(trailing, 8),
         reasons=reasons,
     )
