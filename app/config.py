@@ -10,7 +10,9 @@ class Settings(BaseSettings):
     max_concurrent_positions: int = 8
     max_daily_loss: float = 0.02
     min_confidence: int = 87
-    symbols: str = "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT"
+    # 50 liquid/high-interest Binance USDT markets used by the automatic scanner.
+    # The scanner remains rule/ML driven and does not open trades simply because a coin is moving.
+    symbols: str = "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,DOGEUSDT,ADAUSDT,AVAXUSDT,LINKUSDT,DOTUSDT,TRXUSDT,TONUSDT,SHIBUSDT,BCHUSDT,LTCUSDT,UNIUSDT,NEARUSDT,APTUSDT,SUIUSDT,ARBUSDT,OPUSDT,FILUSDT,ATOMUSDT,ETCUSDT,XLMUSDT,HBARUSDT,ICPUSDT,INJUSDT,PEPEUSDT,WIFUSDT,RENDERUSDT,GRTUSDT,AAVEUSDT,MKRUSDT,ALGOUSDT,VETUSDT,EOSUSDT,SANDUSDT,MANAUSDT,XTZUSDT,THETAUSDT,QNTUSDT,EGLDUSDT,RUNEUSDT,KASUSDT,SEIUSDT,JUPUSDT,TIAUSDT,ENAUSDT"
     scalping_timeframe: str = "5m"
     swing_timeframe: str = "1h"
     candle_limit: int = 250
