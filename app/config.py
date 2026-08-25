@@ -14,15 +14,18 @@ class Settings(BaseSettings):
     scalping_timeframe: str = "5m"
     swing_timeframe: str = "1h"
     candle_limit: int = 250
-    max_scalp_positions: int = 5
-    max_swing_positions: int = 3
-    scalp_min_confidence: int = 87
+    # More scalp capacity so the simulator/journal can capture more short setups.
+    max_scalp_positions: int = 12
+    max_swing_positions: int = 4
+    # Scalp is intentionally more permissive than Swing, while still requiring a
+    # real qualifying signal. This is not a forced-trade mechanism.
+    scalp_min_confidence: int = 80
     swing_min_confidence: int = 82
     scalp_risk_multiplier: float = 0.6
     swing_risk_multiplier: float = 1.0
     scalping_enabled: bool = True
     swing_enabled: bool = True
-    collector_interval_seconds: int = 60
+    collector_interval_seconds: int = 30
 
     # Independent SCALP risk/target profile.
     scalp_sl_atr_multiplier: float = 0.75
