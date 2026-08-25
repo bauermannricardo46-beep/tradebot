@@ -1,12 +1,7 @@
-"""TRADENEX runtime patches loaded before app.main imports its engines.
-
-The package-level hook keeps DEMO/PAPER execution independent from the UI and
-makes the profit lock adaptive to each symbol's own volatility/momentum.
-"""
+"""TRADENEX runtime patches loaded before app.main imports its engines."""
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from threading import Lock
 from typing import Any
 
 
@@ -14,9 +9,8 @@ def _install_runtime_patches() -> None:
     from . import demo as demo_module
     from . import strategy as strategy_module
 
-    # In DEMO mode a rule-based fallback is actionable once the strategy's
-    # structural filters have passed.  The public 80/82 thresholds remain UI
-    # labels, but cannot veto a valid heuristic fallback.
+    # Confidence 80/82 is a UI/strategy label in DEMO. A valid heuristic setup
+    # must not be vetoed by that label.
     _long = strategy_module.score_long_setup
     _short = strategy_module.score_short_setup
 
@@ -42,11 +36,29 @@ def _install_runtime_patches() -> None:
     original_consider = DemoEngine.consider_setups
 
     def consider_setups(self, setups):
-        # Keep only the strongest actionable opportunity per symbol/side/mode
-        # and let the engine consume all available slots automatically.
+        """AUTO DEMO execution: every cycle can consume the available paper slots."""
+        # AUTO SCAN - ON is an execution switch, not merely a scanner switch.
+        # Re-enable the persistent demo engine if an earlier reset/stop left it off.
+        if not self.enabled:
+            self.enabled = True
+            with self.lock, self._connect() as conn:
+                conn.execute("UPDATE demo_account SET enabled=1,updated_at=? WHERE id=1", (self._now(),))
+                conn.commit()
+
+        # Use the full paper-book capacity. The €10,000 equity is risk-sized per
+        # position, so multiple Scalp and Swing trades can coexist without
+        # pretending that the same cash is deducted repeatedly.
+        with self.lock, self._connect() as conn:
+            conn.execute("UPDATE demo_account SET max_positions=20,updated_at=? WHERE id=1", (self._now(),))
+            conn.commit()
+
         ranked = sorted(
             [s for s in (setups or []) if s is not None],
-            key=lambda s: (float(getattr(s, "confidence", 0)), float(getattr(s, "probability", 0)), float(getattr(s, "expected_value_r", 0))),
+            key=lambda s: (
+                float(getattr(s, "confidence", 0)),
+                float(getattr(s, "probability", 0)),
+                float(getattr(s, "expected_value_r", 0)),
+            ),
             reverse=True,
         )
         return original_consider(self, ranked)
@@ -54,13 +66,7 @@ def _install_runtime_patches() -> None:
     DemoEngine.consider_setups = consider_setups
 
     async def adaptive_update_positions(self, fetch_klines) -> int:
-        """Adaptive peak/turn detection; deliberately no fixed profit percentages.
-
-        Activation is based on each position's initial risk and recent volatility.
-        Exit is based on a volatility-normalized retracement plus momentum decay.
-        """
-        import math
-
+        """Adaptive peak/turn detection with volatility and momentum, no fixed TP percentage."""
         with self.lock, self._connect() as conn:
             positions = conn.execute("SELECT * FROM demo_positions WHERE status='OPEN'").fetchall()
 
@@ -73,7 +79,7 @@ def _install_runtime_patches() -> None:
                 high = float(df.iloc[-1].high)
                 low = float(df.iloc[-1].low)
                 closes = [float(x) for x in df["close"].tail(12)]
-                ranges = [abs(float(x) - float(o)) for x, o in zip(df["high"].tail(12), df["low"].tail(12))]
+                ranges = [abs(float(h) - float(l)) for h, l in zip(df["high"].tail(12), df["low"].tail(12))]
                 volatility = max(sum(ranges) / max(len(ranges), 1), 1e-12)
                 entry = float(p["entry"])
                 side = str(p["side"])
@@ -87,51 +93,37 @@ def _install_runtime_patches() -> None:
                     peak = min(peak, low)
                     move = entry - peak
 
-                # Dynamic activation: a fraction of the position's own risk,
-                # with a fee-aware micro threshold. No fixed percentage.
                 fee = float(self._fee_per_order())
                 fee_move = (fee * 3.0) / max(qty, 1e-12)
                 activation_distance = max(volatility * 0.50, initial_risk * 0.18, fee_move)
-                lock_active = bool(p["profit_lock_active"])
-                if move >= activation_distance:
-                    lock_active = True
+                lock_active = bool(p["profit_lock_active"]) or move >= activation_distance
 
-                # Momentum: normalized slope of recent closes and acceleration.
                 if len(closes) >= 6:
                     first = closes[0]
                     last = closes[-1]
-                    mid = closes[len(closes)//2]
+                    mid = closes[len(closes) // 2]
                     slope = (last - first) / max(volatility, 1e-12)
                     recent_slope = (last - mid) / max(volatility, 1e-12)
                 else:
                     slope = recent_slope = 0.0
                 directional = slope if side == "LONG" else -slope
                 recent_directional = recent_slope if side == "LONG" else -recent_slope
-
-                # Adaptive giveback: wider in high volatility / strong momentum,
-                # tighter when momentum has clearly decayed. Still no % limit.
                 momentum_strength = max(0.0, min(3.0, directional))
                 momentum_decay = max(0.0, directional - recent_directional)
-                giveback = volatility * (0.45 + 0.20 * momentum_strength + 0.25 * momentum_decay)
-                giveback = max(giveback, volatility * 0.25)
+                giveback = max(volatility * 0.25, volatility * (0.45 + 0.20 * momentum_strength + 0.25 * momentum_decay))
 
                 exit_price = None
                 reason = None
                 if lock_active and move > activation_distance:
                     if side == "LONG":
                         momentum_turn = recent_directional < 0 or (directional > 0 and recent_directional < directional * 0.25)
-                        retraced = high <= peak and (peak - low) >= giveback
-                        if momentum_turn and retraced:
-                            exit_price = max(entry, peak - giveback)
-                            reason = "ADAPTIVE_PROFIT_LOCK"
+                        if momentum_turn and (peak - low) >= giveback:
+                            exit_price, reason = max(entry, peak - giveback), "ADAPTIVE_PROFIT_LOCK"
                     else:
                         momentum_turn = recent_directional < 0 or (directional > 0 and recent_directional < directional * 0.25)
-                        retraced = low >= peak and (high - peak) >= giveback
-                        if momentum_turn and retraced:
-                            exit_price = min(entry, peak + giveback)
-                            reason = "ADAPTIVE_PROFIT_LOCK"
+                        if momentum_turn and (high - peak) >= giveback:
+                            exit_price, reason = min(entry, peak + giveback), "ADAPTIVE_PROFIT_LOCK"
 
-                # Hard structural protection remains as a safety floor.
                 stop = float(p["stop_loss"])
                 tp2 = float(p["tp2"])
                 if exit_price is None:
@@ -189,5 +181,5 @@ def _install_runtime_patches() -> None:
 try:
     _install_runtime_patches()
 except Exception:
-    # Package import must never prevent the application from starting.
+    # Runtime patches must never prevent the application from starting.
     pass
