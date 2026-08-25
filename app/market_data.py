@@ -9,7 +9,6 @@ import pandas as pd
 
 BINANCE_KLINES: Final = "https://api.binance.com/api/v3/klines"
 
-# REST cache TTLs keep the UI/collector responsive without hammering Binance.
 CACHE_TTL: Final[dict[str, float]] = {
     "1m": 2.0,
     "5m": 5.0,
@@ -29,10 +28,12 @@ async def _get_client() -> httpx.AsyncClient:
     global _client
     async with _client_lock:
         if _client is None or _client.is_closed:
+            # Keep HTTP/2 disabled for maximum compatibility with packaged Windows builds.
             _client = httpx.AsyncClient(
                 timeout=httpx.Timeout(8.0, connect=3.0),
                 limits=httpx.Limits(max_connections=16, max_keepalive_connections=16),
-                http2=True,
+                http2=False,
+                headers={"User-Agent": "TRADENEX/1.4"},
             )
         return _client
 
@@ -70,13 +71,22 @@ async def fetch_klines(symbol: str, interval: str, limit: int = 200) -> pd.DataF
         if cached and now - cached[0] < ttl:
             return cached[1].copy(deep=True)
 
-    params = {"symbol": symbol.upper(), "interval": interval, "limit": limit}
+    params = {"symbol": symbol.upper(), "interval": interval, "limit": int(limit)}
     client = await _get_client()
-    async with _request_sem:
-        response = await client.get(BINANCE_KLINES, params=params)
-        response.raise_for_status()
-        frame = _build_frame(response.json())
-
-    async with _cache_lock:
-        _cache[key] = (time.monotonic(), frame)
-    return frame.copy(deep=True)
+    last_error: Exception | None = None
+    for attempt in range(2):
+        try:
+            async with _request_sem:
+                response = await client.get(BINANCE_KLINES, params=params)
+                response.raise_for_status()
+                frame = _build_frame(response.json())
+            if frame.empty:
+                raise ValueError("Binance returned no candle data")
+            async with _cache_lock:
+                _cache[key] = (time.monotonic(), frame)
+            return frame.copy(deep=True)
+        except Exception as exc:
+            last_error = exc
+            if attempt == 0:
+                await asyncio.sleep(0.15)
+    raise RuntimeError(f"Binance market data unavailable for {symbol}/{interval}: {last_error}") from last_error
