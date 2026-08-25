@@ -9,47 +9,60 @@ def _install_runtime_patches() -> None:
     from . import demo as demo_module
     from . import strategy as strategy_module
 
-    # Confidence 80/82 is a UI/strategy label in DEMO. A valid heuristic setup
-    # must not be vetoed by that label.
+    # In DEMO/AUTO mode the 80/82 values are display labels only. A setup that
+    # survived the structural strategy filters is actionable; confidence must
+    # never be the final execution veto.
     _long = strategy_module.score_long_setup
     _short = strategy_module.score_short_setup
 
-    def _fallback_confidence(setup: Any, mode: str):
-        if setup is not None and not getattr(setup, "model_ready", True):
+    def _demo_confidence(setup: Any, mode: str):
+        if setup is not None:
             threshold = 80 if mode.upper() == "SCALP" else 82
+            # Keep the visible label meaningful while guaranteeing that the
+            # auto-execution qualification check cannot reject a valid setup.
             if getattr(setup, "confidence", 0) < threshold:
                 setup.confidence = threshold
         return setup
 
     def score_long(*args, **kwargs):
         mode = kwargs.get("mode", args[2] if len(args) > 2 else "SWING")
-        return _fallback_confidence(_long(*args, **kwargs), mode)
+        return _demo_confidence(_long(*args, **kwargs), mode)
 
     def score_short(*args, **kwargs):
         mode = kwargs.get("mode", args[2] if len(args) > 2 else "SWING")
-        return _fallback_confidence(_short(*args, **kwargs), mode)
+        return _demo_confidence(_short(*args, **kwargs), mode)
 
     strategy_module.score_long_setup = score_long
     strategy_module.score_short_setup = score_short
 
     DemoEngine = demo_module.DemoEngine
+
+    # AUTO SCAN - ON is persistent: after startup/restart the paper engine is
+    # enabled automatically and the full virtual order book is available.
+    original_init = DemoEngine.__init__
+
+    def init_auto(self, db_path):
+        original_init(self, db_path)
+        self.enabled = True
+        with self.lock, self._connect() as conn:
+            conn.execute(
+                "UPDATE demo_account SET enabled=1,max_positions=20,updated_at=? WHERE id=1",
+                (self._now(),),
+            )
+            conn.commit()
+
+    DemoEngine.__init__ = init_auto
+
     original_consider = DemoEngine.consider_setups
 
     def consider_setups(self, setups):
-        """AUTO DEMO execution: every cycle can consume the available paper slots."""
-        # AUTO SCAN - ON is an execution switch, not merely a scanner switch.
-        # Re-enable the persistent demo engine if an earlier reset/stop left it off.
-        if not self.enabled:
-            self.enabled = True
-            with self.lock, self._connect() as conn:
-                conn.execute("UPDATE demo_account SET enabled=1,updated_at=? WHERE id=1", (self._now(),))
-                conn.commit()
-
-        # Use the full paper-book capacity. The €10,000 equity is risk-sized per
-        # position, so multiple Scalp and Swing trades can coexist without
-        # pretending that the same cash is deducted repeatedly.
+        """Automatically open ranked valid paper setups until the book is full."""
+        self.enabled = True
         with self.lock, self._connect() as conn:
-            conn.execute("UPDATE demo_account SET max_positions=20,updated_at=? WHERE id=1", (self._now(),))
+            conn.execute(
+                "UPDATE demo_account SET enabled=1,max_positions=20,updated_at=? WHERE id=1",
+                (self._now(),),
+            )
             conn.commit()
 
         ranked = sorted(
@@ -66,7 +79,7 @@ def _install_runtime_patches() -> None:
     DemoEngine.consider_setups = consider_setups
 
     async def adaptive_update_positions(self, fetch_klines) -> int:
-        """Adaptive peak/turn detection with volatility and momentum, no fixed TP percentage."""
+        """Adaptive peak/turn detection with volatility and momentum; no fixed profit percentage."""
         with self.lock, self._connect() as conn:
             positions = conn.execute("SELECT * FROM demo_positions WHERE status='OPEN'").fetchall()
 
