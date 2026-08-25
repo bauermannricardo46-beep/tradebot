@@ -34,6 +34,7 @@ class DemoEngine:
                     risk_per_trade REAL NOT NULL DEFAULT 0.005,
                     max_positions INTEGER NOT NULL DEFAULT 5,
                     enabled INTEGER NOT NULL DEFAULT 1,
+                    auto_scan_user_set INTEGER NOT NULL DEFAULT 0,
                     updated_at TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS demo_positions (
@@ -72,15 +73,20 @@ class DemoEngine:
                 );
                 """
             )
+            existing = {row[1] for row in conn.execute("PRAGMA table_info(demo_account)").fetchall()}
+            if "auto_scan_user_set" not in existing:
+                conn.execute("ALTER TABLE demo_account ADD COLUMN auto_scan_user_set INTEGER NOT NULL DEFAULT 0")
+
             if conn.execute("SELECT id FROM demo_account WHERE id=1").fetchone() is None:
                 conn.execute(
-                    "INSERT INTO demo_account(id,starting_budget,equity,risk_per_trade,max_positions,enabled,updated_at) VALUES(1,10000,10000,0.005,5,1,?)",
+                    "INSERT INTO demo_account(id,starting_budget,equity,risk_per_trade,max_positions,enabled,auto_scan_user_set,updated_at) VALUES(1,10000,10000,0.005,5,1,0,?)",
                     (self._now(),),
                 )
             else:
-                # Preserve an explicit user stop; only repair legacy rows that have never been used.
-                row = conn.execute("SELECT enabled FROM demo_account WHERE id=1").fetchone()
-                if row is not None and row[0] is None:
+                row = conn.execute("SELECT enabled,auto_scan_user_set FROM demo_account WHERE id=1").fetchone()
+                # Legacy installations had enabled=0 solely because auto-run did not exist yet.
+                # Convert that legacy state to the new default ON exactly once.
+                if row is not None and int(row[1] or 0) == 0 and int(row[0] or 0) == 0:
                     conn.execute("UPDATE demo_account SET enabled=1,updated_at=? WHERE id=1", (self._now(),))
             conn.commit()
 
@@ -107,7 +113,7 @@ class DemoEngine:
 
     def set_enabled(self, enabled: bool) -> dict[str, Any]:
         with self.lock, self._connect() as conn:
-            conn.execute("UPDATE demo_account SET enabled=?,updated_at=? WHERE id=1", (int(enabled), self._now()))
+            conn.execute("UPDATE demo_account SET enabled=?,auto_scan_user_set=1,updated_at=? WHERE id=1", (int(enabled), self._now()))
             conn.commit()
         self.enabled = enabled
         return self.status()
@@ -118,7 +124,8 @@ class DemoEngine:
             budget = float(row[0]) if row else 10000.0
             conn.execute("DELETE FROM demo_positions")
             conn.execute("DELETE FROM demo_trades")
-            conn.execute("UPDATE demo_account SET equity=?,enabled=0,updated_at=? WHERE id=1", (budget, self._now()))
+            # Reset is an explicit user action, therefore the scanner stays stopped until START/AN is pressed.
+            conn.execute("UPDATE demo_account SET equity=?,enabled=0,auto_scan_user_set=1,updated_at=? WHERE id=1", (budget, self._now()))
             conn.commit()
         self.enabled = False
         return self.status()
@@ -142,11 +149,7 @@ class DemoEngine:
         """Fill available target slots with the best distinct qualified setups."""
         if not setups:
             return 0
-        ranked = sorted(
-            setups,
-            key=lambda s: (float(getattr(s, "probability", 0.0)), float(getattr(s, "expected_value_r", 0.0))),
-            reverse=True,
-        )
+        ranked = sorted(setups, key=lambda s: (float(getattr(s, "probability", 0.0)), float(getattr(s, "expected_value_r", 0.0))), reverse=True)
         opened = 0
         with self.lock, self._connect() as conn:
             account = self._account(conn)
@@ -157,7 +160,6 @@ class DemoEngine:
             slots = max(0, max_positions - open_count)
             if slots <= 0:
                 return 0
-
             used_keys: set[tuple[str, str, str]] = set()
             for setup in ranked:
                 if opened >= slots:
@@ -165,10 +167,7 @@ class DemoEngine:
                 key = (str(setup.symbol), str(setup.side), str(setup.mode))
                 if key in used_keys:
                     continue
-                duplicate = conn.execute(
-                    "SELECT 1 FROM demo_positions WHERE status='OPEN' AND symbol=? AND side=? AND mode=?",
-                    key,
-                ).fetchone()
+                duplicate = conn.execute("SELECT 1 FROM demo_positions WHERE status='OPEN' AND symbol=? AND side=? AND mode=?", key).fetchone()
                 if duplicate:
                     continue
                 distance = abs(float(setup.entry) - float(setup.stop_loss))
@@ -181,11 +180,7 @@ class DemoEngine:
                 trail_distance = distance * (0.8 if setup.mode == "SCALP" else 1.0)
                 conn.execute(
                     "INSERT INTO demo_positions(id,symbol,side,mode,timeframe,entry,stop_loss,tp1,tp2,trailing_stop,trail_distance,quantity,opened_at,status) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?, 'OPEN')",
-                    (
-                        str(uuid.uuid4()), setup.symbol, setup.side, setup.mode, setup.timeframe,
-                        setup.entry, setup.stop_loss, setup.take_profit_1, setup.take_profit_2,
-                        setup.trailing_stop, trail_distance, quantity, self._now(),
-                    ),
+                    (str(uuid.uuid4()), setup.symbol, setup.side, setup.mode, setup.timeframe, setup.entry, setup.stop_loss, setup.take_profit_1, setup.take_profit_2, setup.trailing_stop, trail_distance, quantity, self._now()),
                 )
                 used_keys.add(key)
                 opened += 1
@@ -223,52 +218,29 @@ class DemoEngine:
             entry = float(row["entry"])
             exit_price = None
             reason = None
-
             if side == "LONG":
-                if high >= float(row["tp1"]):
-                    tp1_hit = True
+                if high >= float(row["tp1"]): tp1_hit = True
                 if tp1_hit:
-                    trailing = max(float(trailing or entry), high - trail)
-                    stop = max(stop, trailing)
-                if high >= float(row["tp2"]):
-                    exit_price, reason = float(row["tp2"]), "TP2"
-                elif low <= stop:
-                    exit_price, reason = stop, ("TRAILING_STOP" if tp1_hit else "INITIAL_STOP")
+                    trailing = max(float(trailing or entry), high - trail); stop = max(stop, trailing)
+                if high >= float(row["tp2"]): exit_price, reason = float(row["tp2"]), "TP2"
+                elif low <= stop: exit_price, reason = stop, ("TRAILING_STOP" if tp1_hit else "INITIAL_STOP")
             else:
-                if low <= float(row["tp1"]):
-                    tp1_hit = True
+                if low <= float(row["tp1"]): tp1_hit = True
                 if tp1_hit:
-                    trailing = min(float(trailing or entry), low + trail)
-                    stop = min(stop, trailing)
-                if low <= float(row["tp2"]):
-                    exit_price, reason = float(row["tp2"]), "TP2"
-                elif high >= stop:
-                    exit_price, reason = stop, ("TRAILING_STOP" if tp1_hit else "INITIAL_STOP")
-
+                    trailing = min(float(trailing or entry), low + trail); stop = min(stop, trailing)
+                if low <= float(row["tp2"]): exit_price, reason = float(row["tp2"]), "TP2"
+                elif high >= stop: exit_price, reason = stop, ("TRAILING_STOP" if tp1_hit else "INITIAL_STOP")
             if exit_price is None:
-                conn.execute(
-                    "UPDATE demo_positions SET stop_loss=?,trailing_stop=?,tp1_hit=? WHERE id=?",
-                    (stop, trailing, int(tp1_hit), row["id"]),
-                )
-                conn.commit()
-                return
-
+                conn.execute("UPDATE demo_positions SET stop_loss=?,trailing_stop=?,tp1_hit=? WHERE id=?", (stop, trailing, int(tp1_hit), row["id"])); conn.commit(); return
             qty = float(row["quantity"])
             pnl = ((exit_price - entry) if side == "LONG" else (entry - exit_price)) * qty
             risk_distance = abs(entry - float(row["stop_loss"]))
             signed_r = ((exit_price - entry) if side == "LONG" else (entry - exit_price)) / risk_distance if risk_distance else 0.0
             result = "WIN" if pnl > 0 else "LOSS"
             now = self._now()
-            conn.execute(
-                "UPDATE demo_positions SET status='CLOSED',closed_at=?,exit_price=?,pnl=?,exit_reason=?,stop_loss=?,trailing_stop=?,tp1_hit=? WHERE id=?",
-                (now, exit_price, pnl, reason, stop, trailing, int(tp1_hit), row["id"]),
-            )
-            conn.execute(
-                "INSERT INTO demo_trades(position_id,closed_at,symbol,side,mode,pnl,result,entry,exit_price,risk_r) VALUES(?,?,?,?,?,?,?,?,?,?)",
-                (row["id"], now, row["symbol"], side, row["mode"], pnl, result, entry, exit_price, signed_r),
-            )
-            conn.execute("UPDATE demo_account SET equity=equity+?,updated_at=? WHERE id=1", (pnl, now))
-            conn.commit()
+            conn.execute("UPDATE demo_positions SET status='CLOSED',closed_at=?,exit_price=?,pnl=?,exit_reason=?,stop_loss=?,trailing_stop=?,tp1_hit=? WHERE id=?", (now, exit_price, pnl, reason, stop, trailing, int(tp1_hit), row["id"]))
+            conn.execute("INSERT INTO demo_trades(position_id,closed_at,symbol,side,mode,pnl,result,entry,exit_price,risk_r) VALUES(?,?,?,?,?,?,?,?,?,?)", (row["id"], now, row["symbol"], side, row["mode"], pnl, result, entry, exit_price, signed_r))
+            conn.execute("UPDATE demo_account SET equity=equity+?,updated_at=? WHERE id=1", (pnl, now)); conn.commit()
 
     def status(self) -> dict[str, Any]:
         with self.lock, self._connect() as conn:
@@ -281,16 +253,7 @@ class DemoEngine:
             net = gross_profit + gross_loss
             open_positions = int(conn.execute("SELECT COUNT(*) FROM demo_positions WHERE status='OPEN'").fetchone()[0])
             budget = float(a["starting_budget"])
-            return {
-                "enabled": bool(a["enabled"]), "budget": budget, "equity": float(a["equity"]),
-                "pnl": net, "pnl_pct": net / budget * 100 if budget else 0.0,
-                "gross_profit": gross_profit, "gross_loss": gross_loss, "net_pnl": net,
-                "trades": total, "closed_trades": total, "wins": wins, "losses": losses,
-                "win_rate": wins / total * 100 if total else 0.0,
-                "risk_per_trade": float(a["risk_per_trade"]), "max_positions": int(a["max_positions"]),
-                "open_positions": open_positions, "target_open_positions": int(a["max_positions"]),
-                "free_slots": max(0, int(a["max_positions"]) - open_positions), "updated_at": a["updated_at"],
-            }
+            return {"enabled": bool(a["enabled"]), "budget": budget, "equity": float(a["equity"]), "pnl": net, "pnl_pct": net / budget * 100 if budget else 0.0, "gross_profit": gross_profit, "gross_loss": gross_loss, "net_pnl": net, "trades": total, "closed_trades": total, "wins": wins, "losses": losses, "win_rate": wins / total * 100 if total else 0.0, "risk_per_trade": float(a["risk_per_trade"]), "max_positions": int(a["max_positions"]), "open_positions": open_positions, "target_open_positions": int(a["max_positions"]), "free_slots": max(0, int(a["max_positions"]) - open_positions), "updated_at": a["updated_at"]}
 
     def open_positions(self) -> list[dict[str, Any]]:
         with self.lock, self._connect() as conn:
@@ -301,43 +264,7 @@ class DemoEngine:
             return [dict(r) for r in conn.execute("SELECT * FROM demo_trades ORDER BY id DESC LIMIT ?", (max(1, min(limit, 500)),)).fetchall()]
 
     def journal(self, limit: int = 100) -> list[dict[str, Any]]:
-        """Return open and closed demo trades as one live journal with start and end timestamps."""
         limit = max(1, min(limit, 500))
         with self.lock, self._connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT
-                    p.id AS position_id,
-                    p.opened_at,
-                    p.closed_at,
-                    p.symbol,
-                    p.side,
-                    p.mode,
-                    p.timeframe,
-                    p.entry,
-                    p.exit_price,
-                    p.pnl,
-                    p.status,
-                    CASE
-                        WHEN p.status='OPEN' THEN 'OPEN'
-                        WHEN p.pnl > 0 THEN 'WIN'
-                        ELSE 'LOSS'
-                    END AS result,
-                    CASE
-                        WHEN p.status='OPEN' THEN NULL
-                        ELSE t.risk_r
-                    END AS risk_r,
-                    p.exit_reason,
-                    p.stop_loss,
-                    p.tp1,
-                    p.tp2,
-                    p.trailing_stop,
-                    p.quantity
-                FROM demo_positions p
-                LEFT JOIN demo_trades t ON t.position_id = p.id
-                ORDER BY COALESCE(p.closed_at, p.opened_at) DESC
-                LIMIT ?
-                """,
-                (limit,),
-            ).fetchall()
+            rows = conn.execute("""SELECT p.id AS position_id,p.opened_at,p.closed_at,p.symbol,p.side,p.mode,p.timeframe,p.entry,p.exit_price,p.pnl,p.status,CASE WHEN p.status='OPEN' THEN 'OPEN' WHEN p.pnl > 0 THEN 'WIN' ELSE 'LOSS' END AS result,CASE WHEN p.status='OPEN' THEN NULL ELSE t.risk_r END AS risk_r,p.exit_reason,p.stop_loss,p.tp1,p.tp2,p.trailing_stop,p.quantity FROM demo_positions p LEFT JOIN demo_trades t ON t.position_id=p.id ORDER BY COALESCE(p.closed_at,p.opened_at) DESC LIMIT ?""", (limit,)).fetchall()
             return [dict(r) for r in rows]
