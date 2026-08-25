@@ -7,15 +7,16 @@ class Settings(BaseSettings):
     paper_trading: bool = True
     starting_equity: float = 10_000.0
     risk_per_trade: float = 0.005
-    max_concurrent_positions: int = 8
+    max_concurrent_positions: int = 20
     max_daily_loss: float = 0.02
-    min_confidence: int = 87
+    min_confidence: int = 0
     symbols: str = "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,DOGEUSDT,ADAUSDT,AVAXUSDT,LINKUSDT,DOTUSDT,TRXUSDT,TONUSDT,SHIBUSDT,BCHUSDT,LTCUSDT,UNIUSDT,NEARUSDT,APTUSDT,SUIUSDT,ARBUSDT,OPUSDT,FILUSDT,ATOMUSDT,ETCUSDT,XLMUSDT,HBARUSDT,ICPUSDT,INJUSDT,PEPEUSDT,WIFUSDT,RENDERUSDT,GRTUSDT,AAVEUSDT,MKRUSDT,ALGOUSDT,VETUSDT,EOSUSDT,SANDUSDT,MANAUSDT,XTZUSDT,THETAUSDT,QNTUSDT,EGLDUSDT,RUNEUSDT,KASUSDT,SEIUSDT,JUPUSDT,TIAUSDT,ENAUSDT"
     scalping_timeframe: str = "5m"
     swing_timeframe: str = "1h"
     candle_limit: int = 250
     max_scalp_positions: int = 12
     max_swing_positions: int = 4
+    # Display labels retained in the UI; AUTO-DEMO does not use them as gates.
     scalp_min_confidence: int = 80
     swing_min_confidence: int = 82
     scalp_risk_multiplier: float = 0.6
@@ -31,12 +32,10 @@ class Settings(BaseSettings):
     swing_tp1_rr: float = 2.2
     swing_tp2_rr: float = 4.0
 
-    # Fixed absolute demo fees per order, as requested.
     hyperliquid_maker_fee: float = 0.004
     hyperliquid_taker_fee: float = 0.007
     demo_fee_type: str = "TAKER"
 
-    # Custom software profit lock, independent from exchange-native trailing TP.
     scalp_profit_lock_activation_pct: float = 0.8
     scalp_profit_lock_retracement_pct: float = 0.25
     swing_profit_lock_activation_pct: float = 1.5
