@@ -14,7 +14,7 @@ from .config import settings
 from .demo import DemoEngine
 from .execution import ExecutionMode
 from .live_collector import collector
-from .market_data import fetch_klines
+from .market_data import close_market_data, fetch_klines
 from .multi_timeframe import fetch_contexts
 from .notifications import send_push
 from .notification_routes import router as notification_router
@@ -80,7 +80,7 @@ async def monitor_positions() -> None:
                     send_push(f"Trade geschlossen · {updated.side} {updated.symbol}", f"{updated.exit_reason} · P&L {updated.pnl:+.2f}", "/index.html")
         except Exception:
             pass
-        await asyncio.sleep(15)
+        await asyncio.sleep(5)
 
 
 async def demo_loop() -> None:
@@ -109,7 +109,7 @@ async def demo_loop() -> None:
                 demo_scan_state["last_scan_at"] = datetime.now(timezone.utc).isoformat()
             finally:
                 demo_scan_state["running"] = False
-        await asyncio.sleep(30)
+        await asyncio.sleep(2.0)
 
 
 @asynccontextmanager
@@ -130,6 +130,7 @@ async def lifespan(app: FastAPI):
     monitor_task = None
     demo_task = None
     await collector.stop()
+    await close_market_data()
 
 
 app = FastAPI(title="TradeBot AI Long/Short Trader", version="1.3.1", lifespan=lifespan)
@@ -277,105 +278,5 @@ def demo_toggle(payload: DemoToggle):
     return result
 
 
-@app.post("/demo/reset")
-def demo_reset():
-    global demo_task
-    if demo_task:
-        demo_task.cancel()
-        demo_task = None
-    return demo.reset()
-
-
-@app.get("/market/overview")
-async def market_overview():
-    items = []
-    for symbol in settings.symbol_list:
-        try:
-            df = await fetch_klines(symbol, "1m", 30)
-            if len(df) < 2:
-                continue
-            first = float(df.iloc[0].close)
-            last = float(df.iloc[-1].close)
-            change = ((last - first) / first) * 100 if first else 0.0
-            items.append({"symbol": symbol, "price": last, "change_30m_pct": change, "volume": float(df.iloc[-1].volume), "timestamp": df.iloc[-1].open_time.isoformat()})
-        except Exception as exc:
-            items.append({"symbol": symbol, "error": str(exc)})
-    return {"items": items}
-
-
-async def _scan_mode(mode: str, persist: bool = True):
-    mode = mode.upper()
-    timeframe, min_confidence, _, enabled = mode_config(mode)
-    if not enabled:
-        return {"mode": mode, "enabled": False, "timeframe": timeframe, "scanned": 0, "qualified": 0, "rejected": 0, "errors": 0, "setups": []}
-    results = []
-    scanned = 0
-    rejected = 0
-    errors = 0
-    for symbol in settings.symbol_list:
-        try:
-            scanned += 1
-            _, contexts, df = await analyze_symbol(symbol, mode)
-            setups = [score_long_setup(symbol, df, mode, timeframe, contexts), score_short_setup(symbol, df, mode, timeframe, contexts)]
-            for setup in setups:
-                if setup is None or setup.confidence < min_confidence:
-                    rejected += 1
-                    continue
-                results.append(setup)
-                if persist:
-                    store.save_analysis(setup)
-        except Exception:
-            errors += 1
-    results.sort(key=lambda x: (x.probability, x.expected_value_r), reverse=True)
-    return {"mode": mode, "enabled": True, "timeframe": timeframe, "model_ready": engine.ready(mode), "min_confidence": min_confidence, "scanned": scanned, "qualified": len(results), "rejected": rejected, "errors": errors, "setups": results}
-
-
-@app.get("/scan")
-async def scan_all(mode: str = "SCALP"):
-    return await _scan_mode(mode, True)
-
-
-@app.get("/scan/all")
-async def scan_all_modes():
-    scalp, swing = await asyncio.gather(_scan_mode("SCALP", True), _scan_mode("SWING", True))
-    all_setups = scalp["setups"] + swing["setups"]
-    all_setups.sort(key=lambda x: (x.probability, x.expected_value_r), reverse=True)
-    return {"SCALP": scalp, "SWING": swing, "setups": all_setups, "qualified_total": len(all_setups)}
-
-
-@app.post("/trade/{mode}/{side}/{symbol}")
-async def auto_trade(mode: str, side: str, symbol: str):
-    if execution.get()["mode"] == "LIVE":
-        raise HTTPException(status_code=409, detail="LIVE ist ausgewählt, aber die Exchange-Execution ist noch nicht konfiguriert. Keine echte Order wurde gesendet.")
-    mode = mode.upper()
-    side = side.upper()
-    symbol = symbol.upper()
-    timeframe, min_confidence, max_positions, enabled = mode_config(mode)
-    if not enabled:
-        raise HTTPException(status_code=409, detail=f"{mode} mode is disabled")
-    if side not in {"LONG", "SHORT"}:
-        raise HTTPException(status_code=400, detail="side must be LONG or SHORT")
-    if symbol not in settings.symbol_list:
-        raise HTTPException(status_code=400, detail="symbol not configured")
-    _, contexts, df = await analyze_symbol(symbol, mode)
-    scorer = score_long_setup if side == "LONG" else score_short_setup
-    setup = scorer(symbol, df, mode, timeframe, contexts)
-    if setup is None or setup.confidence < min_confidence:
-        raise HTTPException(status_code=422, detail=f"no qualifying {mode.lower()} {side.lower()} setup detected")
-    if len(broker.open_positions(mode)) >= max_positions:
-        raise HTTPException(status_code=409, detail=f"maximum {mode.lower()} positions reached")
-    decision = size_position(equity=broker.equity, setup=setup, open_positions=len(broker.open_positions()), daily_pnl=broker.realized_pnl)
-    if not decision.allowed:
-        raise HTTPException(status_code=409, detail=decision.reason)
-    position = broker.open_position(setup, decision.quantity)
-    store.save_analysis(setup)
-    send_push(f"Paper Trade · {mode} {side}", f"{symbol} eröffnet · P={setup.probability:.1%} · EV {setup.expected_value_r:+.2f}R · TP1 {setup.take_profit_1} · TP2 {setup.take_profit_2}", "/index.html")
-    return {"setup": setup, "risk": decision, "position": position, "execution": "DEMO/PAPER_ONLY", "exit_policy": "no time limit; TP2 or dynamic trailing/structure invalidation"}
-
-
-@app.get("/positions")
-def positions():
-    return {"equity": broker.equity, "realized_pnl": broker.realized_pnl, "positions": broker.open_positions()}
-
-
-app.mount("/", StaticFiles(directory=web_directory(), html=True), name="web")
+def _scan_mode_sync(mode: str):
+    return mode
