@@ -10,8 +10,6 @@ class Settings(BaseSettings):
     max_concurrent_positions: int = 8
     max_daily_loss: float = 0.02
     min_confidence: int = 87
-    # 50 liquid/high-interest Binance USDT markets used by the automatic scanner.
-    # The scanner remains rule/ML driven and does not open trades simply because a coin is moving.
     symbols: str = "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,DOGEUSDT,ADAUSDT,AVAXUSDT,LINKUSDT,DOTUSDT,TRXUSDT,TONUSDT,SHIBUSDT,BCHUSDT,LTCUSDT,UNIUSDT,NEARUSDT,APTUSDT,SUIUSDT,ARBUSDT,OPUSDT,FILUSDT,ATOMUSDT,ETCUSDT,XLMUSDT,HBARUSDT,ICPUSDT,INJUSDT,PEPEUSDT,WIFUSDT,RENDERUSDT,GRTUSDT,AAVEUSDT,MKRUSDT,ALGOUSDT,VETUSDT,EOSUSDT,SANDUSDT,MANAUSDT,XTZUSDT,THETAUSDT,QNTUSDT,EGLDUSDT,RUNEUSDT,KASUSDT,SEIUSDT,JUPUSDT,TIAUSDT,ENAUSDT"
     scalping_timeframe: str = "5m"
     swing_timeframe: str = "1h"
@@ -26,17 +24,24 @@ class Settings(BaseSettings):
     swing_enabled: bool = True
     collector_interval_seconds: float = 2.0
 
-    # Independent SCALP risk/target profile.
     scalp_sl_atr_multiplier: float = 0.75
     scalp_tp1_rr: float = 1.8
     scalp_tp2_rr: float = 2.7
-
-    # Independent SWING risk/target profile.
     swing_sl_atr_multiplier: float = 1.35
     swing_tp1_rr: float = 2.2
     swing_tp2_rr: float = 4.0
 
-    # Optional GitHub analysis archive. Never commit the token to the repository.
+    # Fixed absolute demo fees per order, as requested.
+    hyperliquid_maker_fee: float = 0.004
+    hyperliquid_taker_fee: float = 0.007
+    demo_fee_type: str = "TAKER"
+
+    # Custom software profit lock, independent from exchange-native trailing TP.
+    scalp_profit_lock_activation_pct: float = 0.8
+    scalp_profit_lock_retracement_pct: float = 0.25
+    swing_profit_lock_activation_pct: float = 1.5
+    swing_profit_lock_retracement_pct: float = 0.50
+
     github_sync_enabled: bool = True
     github_sync_interval_seconds: int = 300
     github_sync_repo: str = "bauermannricardo46-beep/tradebot"
