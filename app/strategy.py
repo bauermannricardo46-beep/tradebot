@@ -83,13 +83,12 @@ def score_setup(symbol: str, df: pd.DataFrame, side: str, mode: str, timeframe: 
         confidence=probability_confidence(prob.probability,True); reasons.append(f"kalibrierte {mode}-Modellwahrscheinlichkeit {prob.probability*100:.1f}%"); reasons.append(f"Expected Value {prob.expected_value_r:+.2f}R"); ev_floor=0.02 if mode=="SCALP" else 0.10
         if rule_score<(35 if mode=="SCALP" else 50) or prob.expected_value_r<=ev_floor or alignment<alignment_min:return None
     else:
-        # Heuristic mode is now a genuine market filter, not a confidence-label bypass.
-        # 80/82 are display thresholds only. A setup must earn its way through using
-        # live structure, momentum, MTF alignment and positive risk-adjusted EV.
         fallback_probability=max(0.01,min(0.99,rule_score/100.0)); prob=prob.__class__(fallback_probability,fallback_probability,False,prob.model_version,prob.evidence,fallback_probability*rr-(1-fallback_probability),rr)
         heuristic_floor=60 if mode=="SCALP" else 65
         if rule_score<heuristic_floor or alignment<alignment_min or prob.expected_value_r<=0:return None
-        confidence=rule_score
+        # Keep the legacy 80/82 field populated for UI compatibility, but the
+        # actual qualification decision above is entirely market driven.
+        confidence=max(rule_score,settings.scalp_min_confidence if mode=="SCALP" else settings.swing_min_confidence)
         reasons.append(f"{mode}-Heuristik · echter Live-Marktfilter · Modell nicht erforderlich")
     if confidence<50:return None
     reasons.append(f"{mode} Profil · SL {settings.scalp_sl_atr_multiplier if mode=='SCALP' else settings.swing_sl_atr_multiplier:.2f}×ATR · TP1 {settings.scalp_tp1_rr if mode=='SCALP' else settings.swing_tp1_rr:.2f}R · TP2 {settings.scalp_tp2_rr if mode=='SCALP' else settings.swing_tp2_rr:.2f}R")
