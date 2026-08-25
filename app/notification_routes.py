@@ -48,6 +48,7 @@ class ControlStore:
     def __init__(self):
         self.execution = ExecutionMode(store.db_path)
         self._ensure()
+        self.apply_runtime(self.settings())
 
     def _ensure(self):
         with sqlite3.connect(store.db_path) as conn:
@@ -110,6 +111,19 @@ class ControlStore:
                 "updated_at": row[13],
             }
 
+    @staticmethod
+    def apply_runtime(values: dict):
+        settings.scalping_enabled = values["scalp_enabled"]
+        settings.swing_enabled = values["swing_enabled"]
+        settings.risk_per_trade = values["risk_per_trade"]
+        settings.max_daily_loss = values["max_daily_loss"]
+        settings.scalp_sl_atr_multiplier = values["scalp_sl_atr"]
+        settings.scalp_tp1_rr = values["scalp_tp1_rr"]
+        settings.scalp_tp2_rr = values["scalp_tp2_rr"]
+        settings.swing_sl_atr_multiplier = values["swing_sl_atr"]
+        settings.swing_tp1_rr = values["swing_tp1_rr"]
+        settings.swing_tp2_rr = values["swing_tp2_rr"]
+
     def save_settings(self, p: SettingsPayload):
         now = datetime.now(timezone.utc).isoformat()
         with sqlite3.connect(store.db_path) as conn:
@@ -128,20 +142,9 @@ class ControlStore:
                 ),
             )
             conn.commit()
-        try:
-            settings.scalping_enabled = p.scalp_enabled
-            settings.swing_enabled = p.swing_enabled
-            settings.risk_per_trade = p.risk_per_trade
-            settings.max_daily_loss = p.max_daily_loss
-            settings.scalp_sl_atr_multiplier = p.scalp_sl_atr
-            settings.scalp_tp1_rr = p.scalp_tp1_rr
-            settings.scalp_tp2_rr = p.scalp_tp2_rr
-            settings.swing_sl_atr_multiplier = p.swing_sl_atr
-            settings.swing_tp1_rr = p.swing_tp1_rr
-            settings.swing_tp2_rr = p.swing_tp2_rr
-        except Exception:
-            pass
-        return self.settings()
+        values = self.settings()
+        self.apply_runtime(values)
+        return values
 
 
 control = ControlStore()
