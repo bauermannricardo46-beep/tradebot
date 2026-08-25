@@ -32,6 +32,7 @@ demo_task: asyncio.Task | None = None
 
 demo_scan_state = {
     "running": False,
+    "task_running": False,
     "last_scan_at": None,
     "scalp": {"scanned": 0, "qualified": 0, "rejected": 0, "errors": 0},
     "swing": {"scanned": 0, "qualified": 0, "rejected": 0, "errors": 0},
@@ -85,40 +86,55 @@ async def monitor_positions() -> None:
 
 async def demo_loop() -> None:
     global demo_scan_state
-    while True:
-        if demo.enabled and execution.get()["mode"] == "DEMO":
-            demo_scan_state["running"] = True
-            demo_scan_state["last_error"] = None
-            demo_scan_state["opened_last_cycle"] = 0
-            try:
-                scalp, swing = await asyncio.gather(
-                    _scan_mode("SCALP", persist=False),
-                    _scan_mode("SWING", persist=False),
-                )
-                demo_scan_state["scalp"] = {k: scalp.get(k, 0) for k in ("scanned", "qualified", "rejected", "errors")}
-                demo_scan_state["swing"] = {k: swing.get(k, 0) for k in ("scanned", "qualified", "rejected", "errors")}
+    demo_scan_state["task_running"] = True
+    try:
+        while True:
+            if demo.enabled and execution.get()["mode"] == "DEMO":
+                demo_scan_state["running"] = True
+                demo_scan_state["last_error"] = None
+                demo_scan_state["opened_last_cycle"] = 0
+                try:
+                    scalp, swing = await asyncio.gather(
+                        _scan_mode("SCALP", persist=False),
+                        _scan_mode("SWING", persist=False),
+                    )
+                    demo_scan_state["scalp"] = {k: scalp.get(k, 0) for k in ("scanned", "qualified", "rejected", "errors")}
+                    demo_scan_state["swing"] = {k: swing.get(k, 0) for k in ("scanned", "qualified", "rejected", "errors")}
 
-                candidates = scalp["setups"] + swing["setups"]
-                candidates.sort(key=lambda x: (x.probability, x.expected_value_r), reverse=True)
-                demo_scan_state["best_setup"] = candidates[0] if candidates else None
-                demo_scan_state["opened_last_cycle"] = demo.consider_setups(candidates)
-                await demo.update_positions(fetch_klines)
-                demo_scan_state["last_scan_at"] = datetime.now(timezone.utc).isoformat()
-            except Exception as exc:
-                demo_scan_state["last_error"] = str(exc)
-                demo_scan_state["last_scan_at"] = datetime.now(timezone.utc).isoformat()
-            finally:
-                demo_scan_state["running"] = False
-        await asyncio.sleep(2.0)
+                    candidates = scalp["setups"] + swing["setups"]
+                    candidates.sort(key=lambda x: (x.probability, x.expected_value_r), reverse=True)
+                    demo_scan_state["best_setup"] = candidates[0] if candidates else None
+                    demo_scan_state["opened_last_cycle"] = demo.consider_setups(candidates)
+                    await demo.update_positions(fetch_klines)
+                    demo_scan_state["last_scan_at"] = datetime.now(timezone.utc).isoformat()
+                except Exception as exc:
+                    demo_scan_state["last_error"] = str(exc)
+                    demo_scan_state["last_scan_at"] = datetime.now(timezone.utc).isoformat()
+                finally:
+                    demo_scan_state["running"] = False
+            await asyncio.sleep(2.0)
+    finally:
+        demo_scan_state["task_running"] = False
+        demo_scan_state["running"] = False
+
+
+async def ensure_demo_task() -> bool:
+    global demo_task
+    if execution.get()["mode"] != "DEMO" or not demo.enabled:
+        return False
+    if demo_task is None or demo_task.done():
+        demo_task = asyncio.create_task(demo_loop(), name="tradenex-demo-loop")
+        await asyncio.sleep(0)
+    return True
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global monitor_task, demo_task
     collector.start()
-    monitor_task = asyncio.create_task(monitor_positions())
+    monitor_task = asyncio.create_task(monitor_positions(), name="tradenex-paper-monitor")
     if demo.enabled and execution.get()["mode"] == "DEMO":
-        demo_task = asyncio.create_task(demo_loop())
+        await ensure_demo_task()
     yield
     for task in (monitor_task, demo_task):
         if task:
@@ -133,7 +149,7 @@ async def lifespan(app: FastAPI):
     await close_market_data()
 
 
-app = FastAPI(title="TradeBot AI Long/Short Trader", version="1.3.1", lifespan=lifespan)
+app = FastAPI(title="TradeBot AI Long/Short Trader", version="1.4.1", lifespan=lifespan)
 app.include_router(notification_router)
 
 
@@ -161,7 +177,7 @@ async def analyze_symbol(symbol: str, mode: str):
 def root():
     return {
         "name": "TRADENEX",
-        "version": "1.4.0",
+        "version": "1.4.1",
         "paper_trading": settings.paper_trading,
         "ui": "/index.html",
         "execution": execution.get(),
@@ -180,7 +196,7 @@ def root():
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "paper_trading": settings.paper_trading, "collector_running": collector.running, "position_monitor": monitor_task is not None, "demo_running": demo.enabled, "execution_mode": execution.get()["mode"], "demo_scan": demo_scan_state, "database": str(store.db_path)}
+    return {"status": "ok", "paper_trading": settings.paper_trading, "collector_running": collector.running, "position_monitor": monitor_task is not None, "demo_running": demo.enabled, "demo_task_running": bool(demo_task and not demo_task.done()), "execution_mode": execution.get()["mode"], "demo_scan": demo_scan_state, "database": str(store.db_path)}
 
 
 @app.get("/execution")
@@ -189,7 +205,7 @@ def execution_status():
 
 
 @app.post("/execution")
-def execution_config(payload: ExecutionConfig):
+async def execution_config(payload: ExecutionConfig):
     global demo_task
     try:
         result = execution.set(payload.mode)
@@ -200,8 +216,8 @@ def execution_config(payload: ExecutionConfig):
         if demo_task:
             demo_task.cancel()
             demo_task = None
-    elif demo.enabled and (demo_task is None or demo_task.done()):
-        demo_task = asyncio.create_task(demo_loop())
+    elif demo.enabled:
+        await ensure_demo_task()
     return result
 
 
@@ -264,25 +280,32 @@ def demo_config(payload: DemoConfig):
 
 
 @app.post("/demo/toggle")
-def demo_toggle(payload: DemoToggle):
+async def demo_toggle(payload: DemoToggle):
     global demo_task
     if execution.get()["mode"] != "DEMO":
         raise HTTPException(status_code=409, detail="DEMO ist aktuell nicht der aktive Betriebsmodus")
     result = demo.set_enabled(payload.enabled)
     if payload.enabled:
-        if demo_task is None or demo_task.done():
-            demo_task = asyncio.create_task(demo_loop())
+        await ensure_demo_task()
     elif demo_task:
         demo_task.cancel()
+        try:
+            await demo_task
+        except asyncio.CancelledError:
+            pass
         demo_task = None
     return result
 
 
 @app.post("/demo/reset")
-def demo_reset():
+async def demo_reset():
     global demo_task
     if demo_task:
         demo_task.cancel()
+        try:
+            await demo_task
+        except asyncio.CancelledError:
+            pass
         demo_task = None
     return demo.reset()
 
