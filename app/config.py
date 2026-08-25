@@ -23,6 +23,17 @@ class Settings(BaseSettings):
     scalping_enabled: bool = True
     swing_enabled: bool = True
     collector_interval_seconds: int = 60
+
+    # Independent SCALP risk/target profile.
+    scalp_sl_atr_multiplier: float = 0.75
+    scalp_tp1_rr: float = 1.8
+    scalp_tp2_rr: float = 2.7
+
+    # Independent SWING risk/target profile.
+    swing_sl_atr_multiplier: float = 1.35
+    swing_tp1_rr: float = 2.2
+    swing_tp2_rr: float = 4.0
+
     data_dir: str = Field(default="data", validation_alias=AliasChoices("DATA_DIR", "TRADEBOT_DATA_DIR"))
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore", populate_by_name=True)
