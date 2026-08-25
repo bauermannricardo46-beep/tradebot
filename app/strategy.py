@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 
+from .config import settings
 from .features import add_indicators
 from .models import TradeSetup
 from .multi_timeframe import TimeframeContext, trend_alignment
@@ -19,34 +20,38 @@ def _fib_levels(swing_low: float, swing_high: float) -> tuple[float, float, floa
 
 
 def _build_levels(entry: float, atr: float, side: str, mode: str, swing_low: float, swing_high: float) -> tuple[float, float, float, float]:
-    """Mode-specific trade geometry: scalps use tighter structure; swings use wider structure."""
+    """Use independent, persistent SL/TP profiles for SCALP and SWING."""
+    mode = mode.upper()
     if mode == "SCALP":
-        buffer = max(atr * 0.75, entry * 0.0018)
-        extension_ratio = 0.272
+        sl_atr = settings.scalp_sl_atr_multiplier
+        tp1_rr = settings.scalp_tp1_rr
+        tp2_rr = settings.scalp_tp2_rr
+        min_buffer_pct = 0.0018
+        trail_fraction = 0.35
     else:
-        buffer = max(atr * 1.35, entry * 0.0045)
-        extension_ratio = 0.618
+        sl_atr = settings.swing_sl_atr_multiplier
+        tp1_rr = settings.swing_tp1_rr
+        tp2_rr = settings.swing_tp2_rr
+        min_buffer_pct = 0.0045
+        trail_fraction = 0.15
 
-    fib382, fib500, fib618, fib786 = _fib_levels(swing_low, swing_high)
+    buffer = max(atr * sl_atr, entry * min_buffer_pct)
     if side == "LONG":
         stop = min(swing_low - buffer, entry - buffer)
-        candidates = [x for x in (fib382, fib500, fib618, fib786) if x > entry * (1.003 if mode == "SCALP" else 1.008)]
-        tp1 = min(candidates) if candidates else entry + buffer * (1.8 if mode == "SCALP" else 2.2)
-        extension = swing_high + (swing_high - swing_low) * extension_ratio
-        tp2 = max(tp1, extension)
-        trailing = entry + buffer * (0.35 if mode == "SCALP" else 0.15)
+        risk = abs(entry - stop)
+        tp1 = entry + risk * tp1_rr
+        tp2 = entry + risk * tp2_rr
+        trailing = entry + buffer * trail_fraction
     else:
         stop = max(swing_high + buffer, entry + buffer)
-        candidates = [x for x in (fib382, fib500, fib618, fib786) if x < entry * (0.997 if mode == "SCALP" else 0.992)]
-        tp1 = max(candidates) if candidates else entry - buffer * (1.8 if mode == "SCALP" else 2.2)
-        extension = swing_low - (swing_high - swing_low) * extension_ratio
-        tp2 = min(tp1, extension)
-        trailing = entry - buffer * (0.35 if mode == "SCALP" else 0.15)
+        risk = abs(stop - entry)
+        tp1 = entry - risk * tp1_rr
+        tp2 = entry - risk * tp2_rr
+        trailing = entry - buffer * trail_fraction
     return stop, tp1, tp2, trailing
 
 
 def _scalp_score(r: pd.Series, side: str) -> tuple[int, list[str]]:
-    """Short-horizon momentum/breakout profile."""
     score = 0
     reasons: list[str] = []
     if side == "LONG":
@@ -79,14 +84,12 @@ def _scalp_score(r: pd.Series, side: str) -> tuple[int, list[str]]:
             score += 22; reasons.append("12-Candle Momentum-Breakdown")
         elif r.close < r.open:
             score += 8; reasons.append("bearishe Impulskerze")
-
     if r.volume > r.vol_ma20 * 1.10:
         score += 12; reasons.append("Scalp-Volumen über Durchschnitt")
     return max(0, min(score, 100)), reasons
 
 
 def _swing_score(r: pd.Series, side: str) -> tuple[int, list[str]]:
-    """Longer-horizon structure/trend profile."""
     score = 0
     reasons: list[str] = []
     if side == "LONG":
@@ -119,7 +122,6 @@ def _swing_score(r: pd.Series, side: str) -> tuple[int, list[str]]:
             score += 24; reasons.append("40-Candle Structure Breakdown")
         elif r.close < r.open:
             score += 6; reasons.append("bearishe Swing-Struktur")
-
     if r.volume > r.vol_ma20 * 1.25:
         score += 10; reasons.append("Swing-Volumen deutlich über Durchschnitt")
     return max(0, min(score, 100)), reasons
@@ -145,7 +147,6 @@ def score_setup(symbol: str, df: pd.DataFrame, side: str, mode: str, timeframe: 
     rr = abs(tp2 - float(r.close)) / risk if risk else 0.0
 
     rule_score, reasons = (_scalp_score(r, side) if mode == "SCALP" else _swing_score(r, side))
-
     alignment = trend_alignment(contexts, side) if contexts else 0.5
     reasons.append(f"Multi-Timeframe Alignment {alignment:.0%}")
     alignment_min = 0.60 if mode == "SCALP" else 0.75
@@ -178,19 +179,17 @@ def score_setup(symbol: str, df: pd.DataFrame, side: str, mode: str, timeframe: 
     else:
         confidence = rule_score
         fallback_probability = max(0.01, min(0.99, rule_score / 100.0))
-        prob = prob.__class__(
-            fallback_probability,
-            fallback_probability,
-            False,
-            prob.model_version,
-            prob.evidence,
-            fallback_probability * rr - (1 - fallback_probability),
-            rr,
-        )
+        prob = prob.__class__(fallback_probability, fallback_probability, False, prob.model_version, prob.evidence, fallback_probability * rr - (1 - fallback_probability), rr)
         reasons.append(f"{mode}-Modell noch nicht validiert – regelbasierter Fallback")
 
     if confidence < 50:
         return None
+
+    reasons.append(
+        f"{mode} Profil · SL {settings.scalp_sl_atr_multiplier if mode == 'SCALP' else settings.swing_sl_atr_multiplier:.2f}×ATR · "
+        f"TP1 {settings.scalp_tp1_rr if mode == 'SCALP' else settings.swing_tp1_rr:.2f}R · "
+        f"TP2 {settings.scalp_tp2_rr if mode == 'SCALP' else settings.swing_tp2_rr:.2f}R"
+    )
 
     return TradeSetup(
         symbol=symbol,
@@ -214,7 +213,7 @@ def score_setup(symbol: str, df: pd.DataFrame, side: str, mode: str, timeframe: 
         fib_382=round(fib382, 8),
         fib_500=round(fib500, 8),
         fib_618=round(fib618, 8),
-        fib_786=round(fib_786, 8),
+        fib_786=round(fib786, 8),
         trailing_stop=round(trailing, 8),
         reasons=reasons,
     )
