@@ -19,106 +19,177 @@ def _fib_levels(swing_low: float, swing_high: float) -> tuple[float, float, floa
 
 
 def _build_levels(entry: float, atr: float, side: str, mode: str, swing_low: float, swing_high: float) -> tuple[float, float, float, float]:
-    buffer = max(atr * (0.8 if mode == "SCALP" else 1.2), entry * (0.002 if mode == "SCALP" else 0.004))
+    """Mode-specific trade geometry: scalps use tighter structure; swings use wider structure."""
+    if mode == "SCALP":
+        buffer = max(atr * 0.75, entry * 0.0018)
+        extension_ratio = 0.272
+    else:
+        buffer = max(atr * 1.35, entry * 0.0045)
+        extension_ratio = 0.618
+
     fib382, fib500, fib618, fib786 = _fib_levels(swing_low, swing_high)
     if side == "LONG":
         stop = min(swing_low - buffer, entry - buffer)
-        candidates = [x for x in (fib382, fib500, fib618, fib786, swing_high) if x > entry * 1.005]
-        tp1 = min(candidates) if candidates else entry + buffer * 2
-        extension = swing_high + (swing_high - swing_low) * (0.272 if mode == "SCALP" else 0.618)
+        retracements = (fib382, fib500, fib618, fib786)
+        candidates = [x for x in retracements if x > entry * (1.003 if mode == "SCALP" else 1.008)]
+        tp1 = min(candidates) if candidates else entry + buffer * (1.8 if mode == "SCALP" else 2.2)
+        extension = swing_high + (swing_high - swing_low) * extension_ratio
         tp2 = max(tp1, extension)
-        trailing = max(entry, entry + buffer)
+        trailing = entry + buffer * (0.35 if mode == "SCALP" else 0.15)
     else:
         stop = max(swing_high + buffer, entry + buffer)
-        candidates = [x for x in (fib382, fib500, fib618, fib786, swing_low) if x < entry * 0.995]
-        tp1 = max(candidates) if candidates else entry - buffer * 2
-        extension = swing_low - (swing_high - swing_low) * (0.272 if mode == "SCALP" else 0.618)
+        retracements = (fib382, fib500, fib618, fib786)
+        candidates = [x for x in retracements if x < entry * (0.997 if mode == "SCALP" else 0.992)]
+        tp1 = max(candidates) if candidates else entry - buffer * (1.8 if mode == "SCALP" else 2.2)
+        extension = swing_low - (swing_high - swing_low) * extension_ratio
         tp2 = min(tp1, extension)
-        trailing = min(entry, entry - buffer)
+        trailing = entry - buffer * (0.35 if mode == "SCALP" else 0.15)
     return stop, tp1, tp2, trailing
 
 
-def _rule_score(r: pd.Series, side: str) -> tuple[int, list[str]]:
+def _scalp_score(r: pd.Series, side: str) -> tuple[int, list[str]]:
+    """Short-horizon momentum/breakout profile."""
     score = 0
     reasons: list[str] = []
-    if side == "SHORT":
-        if r.close < r.ema20 < r.ema50:
-            score += 25; reasons.append("Preis unter EMA20 und EMA50")
-        elif r.close < r.ema50:
-            score += 12; reasons.append("Preis unter EMA50")
-        if 45 <= r.rsi <= 62:
-            score += 15; reasons.append("RSI unterstützt bearishe Fortsetzung")
-        elif r.rsi < 40:
-            score += 7; reasons.append("RSI schwach, Bewegung kann aber bereits überdehnt sein")
-        if r.macd_hist < 0:
-            score += 15; reasons.append("negatives MACD-Histogramm")
-        if r.close < r.swing_low20:
-            score += 25; reasons.append("20-Candle-Support-Breakdown")
-        elif r.close < r.open:
-            score += 7; reasons.append("bearishe aktuelle Candle")
-    else:
+    if side == "LONG":
         if r.close > r.ema20 > r.ema50:
-            score += 25; reasons.append("Preis über EMA20 und EMA50")
+            score += 22; reasons.append("5m Microtrend bullish (EMA20 > EMA50)")
+        elif r.close > r.ema20:
+            score += 10; reasons.append("Preis über EMA20")
+        if 35 <= r.rsi <= 56:
+            score += 18; reasons.append("RSI im Scalp-Long-Momentumfenster")
+        elif r.rsi > 70:
+            score -= 5; reasons.append("Scalp-Long bereits überdehnt")
+        if r.macd_hist > 0:
+            score += 16; reasons.append("positives kurzfristiges MACD-Momentum")
+        if r.close > r.swing_high12:
+            score += 22; reasons.append("12-Candle Momentum-Breakout")
+        elif r.close > r.open:
+            score += 8; reasons.append("bullishe Impulskerze")
+    else:
+        if r.close < r.ema20 < r.ema50:
+            score += 22; reasons.append("5m Microtrend bearish (EMA20 < EMA50)")
+        elif r.close < r.ema20:
+            score += 10; reasons.append("Preis unter EMA20")
+        if 44 <= r.rsi <= 65:
+            score += 18; reasons.append("RSI im Scalp-Short-Momentumfenster")
+        elif r.rsi < 30:
+            score -= 5; reasons.append("Scalp-Short bereits überdehnt")
+        if r.macd_hist < 0:
+            score += 16; reasons.append("negatives kurzfristiges MACD-Momentum")
+        if r.close < r.swing_low12:
+            score += 22; reasons.append("12-Candle Momentum-Breakdown")
+        elif r.close < r.open:
+            score += 8; reasons.append("bearishe Impulskerze")
+
+    if r.volume > r.vol_ma20 * 1.10:
+        score += 12; reasons.append("Scalp-Volumen über Durchschnitt")
+    return max(0, min(score, 100)), reasons
+
+
+def _swing_score(r: pd.Series, side: str) -> tuple[int, list[str]]:
+    """Longer-horizon structure/trend profile."""
+    score = 0
+    reasons: list[str] = []
+    if side == "LONG":
+        if r.close > r.ema20 > r.ema50:
+            score += 28; reasons.append("1h Trendstruktur bullish (EMA20 > EMA50)")
         elif r.close > r.ema50:
             score += 12; reasons.append("Preis über EMA50")
-        if 38 <= r.rsi <= 55:
-            score += 15; reasons.append("RSI unterstützt bullishe Fortsetzung")
-        elif r.rsi > 60:
-            score += 7; reasons.append("RSI stark, Bewegung kann aber bereits überdehnt sein")
+        if 40 <= r.rsi <= 58:
+            score += 14; reasons.append("RSI unterstützt nachhaltigen Swing-Long")
+        elif r.rsi > 68:
+            score -= 4; reasons.append("Swing-Long stark überdehnt")
         if r.macd_hist > 0:
-            score += 15; reasons.append("positives MACD-Histogramm")
-        if r.close > r.swing_high20:
-            score += 25; reasons.append("20-Candle-Resistance-Breakout")
+            score += 14; reasons.append("positiver Swing-Momentumfilter")
+        if r.close > r.swing_high40:
+            score += 24; reasons.append("40-Candle Structure Breakout")
         elif r.close > r.open:
-            score += 7; reasons.append("bullishe aktuelle Candle")
+            score += 6; reasons.append("bullishe Tagesstruktur")
+    else:
+        if r.close < r.ema20 < r.ema50:
+            score += 28; reasons.append("1h Trendstruktur bearish (EMA20 < EMA50)")
+        elif r.close < r.ema50:
+            score += 12; reasons.append("Preis unter EMA50")
+        if 42 <= r.rsi <= 60:
+            score += 14; reasons.append("RSI unterstützt nachhaltigen Swing-Short")
+        elif r.rsi < 32:
+            score -= 4; reasons.append("Swing-Short stark überdehnt")
+        if r.macd_hist < 0:
+            score += 14; reasons.append("negativer Swing-Momentumfilter")
+        if r.close < r.swing_low40:
+            score += 24; reasons.append("40-Candle Structure Breakdown")
+        elif r.close < r.open:
+            score += 6; reasons.append("bearishe Tagesstruktur")
+
     if r.volume > r.vol_ma20 * 1.25:
-        score += 10; reasons.append("überdurchschnittliches Volumen")
-    return min(score, 100), reasons
+        score += 10; reasons.append("Swing-Volumen deutlich über Durchschnitt")
+    return max(0, min(score, 100)), reasons
 
 
 def score_setup(symbol: str, df: pd.DataFrame, side: str, mode: str, timeframe: str, contexts: dict[str, TimeframeContext] | None = None) -> TradeSetup | None:
     data = add_indicators(df).dropna()
-    if len(data) < 120:
+    if len(data) < 140:
         return None
     r = data.iloc[-1]
     side = side.upper(); mode = mode.upper()
-    swing_high = float(data["high"].rolling(80).max().iloc[-2])
-    swing_low = float(data["low"].rolling(80).min().iloc[-2])
+
+    # Distinct structural lookbacks for the two strategies.
+    structure_lookback = 30 if mode == "SCALP" else 100
+    swing_high = float(data["high"].rolling(structure_lookback).max().iloc[-2])
+    swing_low = float(data["low"].rolling(structure_lookback).min().iloc[-2])
     stop, tp1, tp2, trailing = _build_levels(float(r.close), float(r.atr), side, mode, swing_low, swing_high)
     risk = abs(stop - float(r.close))
     rr = abs(tp2 - float(r.close)) / risk if risk else 0.0
-    rule_score, reasons = _rule_score(r, side)
+
+    rule_score, reasons = (_scalp_score(r, side) if mode == "SCALP" else _swing_score(r, side))
 
     alignment = trend_alignment(contexts, side) if contexts else 0.5
-    if contexts:
-        reasons.append(f"Multi-Timeframe Alignment {alignment:.0%}")
-        if alignment >= 0.75:
-            rule_score = min(100, rule_score + 8)
-        elif alignment < 0.50:
-            rule_score = max(0, rule_score - 8)
+    reasons.append(f"Multi-Timeframe Alignment {alignment:.0%}")
+    alignment_min = 0.60 if mode == "SCALP" else 0.75
+    alignment_bonus = 10 if mode == "SCALP" else 8
+    if alignment >= alignment_min:
+        rule_score = min(100, rule_score + alignment_bonus)
+    elif alignment < (0.45 if mode == "SCALP" else 0.50):
+        rule_score = max(0, rule_score - 10)
 
     fib382, fib500, fib618, fib786 = _fib_levels(swing_low, swing_high)
     price = float(r.close)
     nearest_fib = min((fib382, fib500, fib618, fib786), key=lambda x: abs(x - price))
-    if abs(nearest_fib - price) / price < 0.012:
-        rule_score = min(100, rule_score + 5)
-        reasons.append("Fib-Confluence in Entry-Nähe")
+    fib_distance_limit = 0.015 if mode == "SCALP" else 0.022
+    if abs(nearest_fib - price) / price < fib_distance_limit:
+        rule_score = min(100, rule_score + (4 if mode == "SCALP" else 7))
+        reasons.append(f"Fib-Confluence ({'kurzfristig' if mode == 'SCALP' else 'strukturell'})")
+
+    min_rr = 1.20 if mode == "SCALP" else 1.80
+    if rr < min_rr:
+        return None
 
     prob = engine.predict(data, side, mode, rr)
     if prob.model_ready:
         confidence = probability_confidence(prob.probability, True)
-        reasons.append(f"kalibrierte Modellwahrscheinlichkeit {prob.probability * 100:.1f}%")
+        reasons.append(f"kalibrierte {mode}-Modellwahrscheinlichkeit {prob.probability * 100:.1f}%")
         reasons.append(f"Expected Value {prob.expected_value_r:+.2f}R")
-        if rule_score < 35 or prob.expected_value_r <= 0.05 or alignment < 0.50:
+        ev_floor = 0.05 if mode == "SCALP" else 0.10
+        if rule_score < (40 if mode == "SCALP" else 50) or prob.expected_value_r <= ev_floor or alignment < alignment_min:
             return None
     else:
         confidence = rule_score
         fallback_probability = max(0.01, min(0.99, rule_score / 100.0))
-        prob = prob.__class__(fallback_probability, fallback_probability, False, prob.model_version, prob.evidence, fallback_probability * rr - (1 - fallback_probability), rr)
-        reasons.append("Modell noch nicht validiert – regelbasierter Fallback")
+        prob = prob.__class__(
+            fallback_probability,
+            fallback_probability,
+            False,
+            prob.model_version,
+            prob.evidence,
+            fallback_probability * rr - (1 - fallback_probability),
+            rr,
+        )
+        reasons.append(f"{mode}-Modell noch nicht validiert – regelbasierter Fallback")
 
     if confidence < 50:
         return None
+
     return TradeSetup(
         symbol=symbol,
         side=side,
