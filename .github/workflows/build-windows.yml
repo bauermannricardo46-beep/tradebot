@@ -1,4 +1,4 @@
-name: Build TRADENEX Windows EXE
+name: Build and Release TRADENEX Windows EXE
 
 on:
   workflow_dispatch:
@@ -12,11 +12,16 @@ on:
       - "requirements.txt"
       - ".github/workflows/build-windows.yml"
 
+permissions:
+  contents: write
+
 jobs:
-  build:
+  build-release:
     runs-on: windows-latest
-    permissions:
-      contents: read
+    env:
+      VERSION: 1.4.${{ github.run_number }}
+      RELEASE_TAG: v1.4.${{ github.run_number }}
+      APP_NAME: TRADENEX
 
     steps:
       - name: Checkout
@@ -34,24 +39,44 @@ jobs:
       - name: Build TRADENEX
         run: python -m PyInstaller --noconfirm --clean tradebot.spec
 
-      - name: Prepare package
+      - name: Prepare versioned release package
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path release | Out-Null
-          Copy-Item dist\TRADENEX.exe release\TRADENEX.exe
-          Set-Content -Path release\README.txt -Value @"
+          $releaseDir = "release"
+          New-Item -ItemType Directory -Force -Path $releaseDir | Out-Null
+          Copy-Item "dist\TRADENEX.exe" "$releaseDir\TRADENEX.exe"
+          Set-Content -Path "$releaseDir\VERSION.txt" -Value $env:VERSION
+          Set-Content -Path "$releaseDir\README.txt" -Value @"
           TRADENEX AI Windows Edition
+          Version: $env:VERSION
 
           Start: TRADENEX.exe
           Live market data: Binance public market-data API
-          Trading: PAPER TRADING ONLY
+          Trading: PAPER TRADING / DEMO ONLY until exchange execution is explicitly configured
           Data directory: %LOCALAPPDATA%\TradeBotAI\data
           Models directory: %LOCALAPPDATA%\TradeBotAI\models
           "@
+          Compress-Archive -Path "$releaseDir\*" -DestinationPath "TRADENEX-Windows-x64-$env:VERSION.zip" -Force
 
-      - name: Upload EXE artifact
+      - name: Upload versioned workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: TRADENEX-Windows-x64
-          path: release/
+          name: TRADENEX-Windows-x64-v${{ env.VERSION }}
+          path: |
+            release/
+            TRADENEX-Windows-x64-${{ env.VERSION }}.zip
           if-no-files-found: error
+
+      - name: Create GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$env:RELEASE_TAG" `
+            "TRADENEX-Windows-x64-$env:VERSION.zip" `
+            "release\TRADENEX.exe" `
+            "release\VERSION.txt" `
+            "release\README.txt" `
+            --repo "${{ github.repository }}" `
+            --title "TRADENEX $env:VERSION" `
+            --generate-notes
