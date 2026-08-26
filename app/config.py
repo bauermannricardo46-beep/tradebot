@@ -13,6 +13,10 @@ TOP20_SYMBOLS: tuple[str, ...] = (
 TOP20_SYMBOL_SET = frozenset(TOP20_SYMBOLS)
 
 
+def is_allowed_symbol(symbol: str) -> bool:
+    return str(symbol).strip().upper() in TOP20_SYMBOL_SET
+
+
 class Settings(BaseSettings):
     app_env: str = "development"
     paper_trading: bool = True
@@ -21,7 +25,7 @@ class Settings(BaseSettings):
     max_concurrent_positions: int = 20
     max_daily_loss: float = 0.02
     min_confidence: int = 0
-    # Keep this configurable only for backward compatibility; runtime symbol_list is hard-clamped below.
+    # Kept only for backward compatibility; runtime symbol_list is hard-clamped to TOP20_SYMBOLS.
     symbols: str = ",".join(TOP20_SYMBOLS)
     scalping_timeframe: str = "5m"
     swing_timeframe: str = "1h"
@@ -67,10 +71,6 @@ class Settings(BaseSettings):
     def symbol_list(self) -> list[str]:
         # Deliberately ignore env/.env symbol overrides: the trading universe is hard-limited to TOP20_SYMBOLS.
         return list(TOP20_SYMBOLS)
-
-    @property
-    def is_allowed_symbol(self):
-        return lambda symbol: str(symbol).strip().upper() in TOP20_SYMBOL_SET
 
 
 settings = Settings()
