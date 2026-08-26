@@ -7,6 +7,8 @@ from typing import Final
 import httpx
 import pandas as pd
 
+from .config import TOP20_SYMBOL_SET
+
 BINANCE_KLINES: Final = "https://api.binance.com/api/v3/klines"
 
 CACHE_TTL: Final[dict[str, float]] = {
@@ -63,7 +65,11 @@ def _build_frame(rows: list[list]) -> pd.DataFrame:
 
 
 async def fetch_klines(symbol: str, interval: str, limit: int = 200) -> pd.DataFrame:
-    key = (symbol.upper(), interval, int(limit))
+    normalized = str(symbol).strip().upper()
+    if normalized not in TOP20_SYMBOL_SET:
+        raise ValueError(f"Symbol {normalized} is blocked: not in TRADENEX TOP-20 whitelist")
+
+    key = (normalized, interval, int(limit))
     now = time.monotonic()
     ttl = _cache_ttl(interval)
     async with _cache_lock:
@@ -71,7 +77,7 @@ async def fetch_klines(symbol: str, interval: str, limit: int = 200) -> pd.DataF
         if cached and now - cached[0] < ttl:
             return cached[1].copy(deep=True)
 
-    params = {"symbol": symbol.upper(), "interval": interval, "limit": int(limit)}
+    params = {"symbol": normalized, "interval": interval, "limit": int(limit)}
     client = await _get_client()
     last_error: Exception | None = None
     for attempt in range(2):
@@ -89,4 +95,4 @@ async def fetch_klines(symbol: str, interval: str, limit: int = 200) -> pd.DataF
             last_error = exc
             if attempt == 0:
                 await asyncio.sleep(0.15)
-    raise RuntimeError(f"Binance market data unavailable for {symbol}/{interval}: {last_error}") from last_error
+    raise RuntimeError(f"Binance market data unavailable for {normalized}/{interval}: {last_error}") from last_error
