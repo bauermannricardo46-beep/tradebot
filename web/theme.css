@@ -11,7 +11,8 @@
 #tradenexAmbience .ambience-scanlines{background:repeating-linear-gradient(180deg,transparent 0 3px,color-mix(in srgb,var(--theme-accent) 5%,transparent) 4px 5px);opacity:.45;animation:tnScan 5s linear infinite}
 body[data-ambience="matrix"] #tradenexAmbience .ambience-grid{background-image:repeating-linear-gradient(90deg,transparent 0 28px,color-mix(in srgb,var(--theme-accent) 5%,transparent) 29px 30px);background-size:30px 100%;animation:tnMatrix 4.5s linear infinite}
 body[data-ambience="particles"] #tradenexAmbience .ambience-grid,body[data-ambience="particles"] #tradenexAmbience .ambience-scanlines{display:none}
-body[data-ambience="aurora"] #tradenexAmbience .ambience-grid,body[data-ambience="aurora"] #tradenexAmbience .ambience-scanlines{display:none}.body[data-ambience="stars"] #tradenexAmbience .ambience-grid{display:none}
+body[data-ambience="aurora"] #tradenexAmbience .ambience-grid,body[data-ambience="aurora"] #tradenexAmbience .ambience-scanlines{display:none}
+body[data-ambience="stars"] #tradenexAmbience .ambience-grid{display:none}
 body[data-ambience="stars"] #tradenexAmbience .ambience-particles{opacity:.75;filter:drop-shadow(0 0 4px var(--theme-metal));background-size:110px 110px,170px 170px,230px 230px,280px 280px,330px 330px}
 body[data-ambience="scanlines"] #tradenexAmbience .ambience-grid,body[data-ambience="scanlines"] #tradenexAmbience .ambience-particles{display:none}
 body[data-ambience="clean"] #tradenexAmbience .ambience-grid,body[data-ambience="clean"] #tradenexAmbience .ambience-particles,body[data-ambience="clean"] #tradenexAmbience .ambience-scanlines{display:none}
