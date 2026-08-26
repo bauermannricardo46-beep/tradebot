@@ -7,7 +7,7 @@ from pathlib import Path
 from threading import Lock
 from typing import Any
 
-from .config import settings
+from .config import TOP20_SYMBOL_SET, settings
 
 
 class DemoEngine:
@@ -128,15 +128,18 @@ class DemoEngine:
             slots=max(0,int(a["max_positions"])-int(conn.execute("SELECT COUNT(*) FROM demo_positions WHERE status='OPEN'").fetchone()[0]))
             used=set()
             for setup in ranked:
+                symbol=str(getattr(setup,"symbol","")).strip().upper()
+                if symbol not in TOP20_SYMBOL_SET:
+                    continue
                 if opened>=slots: break
-                key=(str(setup.symbol),str(setup.side),str(setup.mode))
+                key=(symbol,str(setup.side),str(setup.mode))
                 if key in used or conn.execute("SELECT 1 FROM demo_positions WHERE status='OPEN' AND symbol=? AND side=? AND mode=?",key).fetchone(): continue
                 distance=abs(float(setup.entry)-float(setup.stop_loss))
                 if distance<=0 or float(setup.entry)<=0: continue
                 qty=min(float(a["equity"])*float(a["risk_per_trade"])/distance,float(a["equity"])/float(setup.entry))
                 if qty<=0: continue
                 trail_distance=distance*(0.8 if setup.mode=="SCALP" else 1.0)
-                conn.execute("INSERT INTO demo_positions(id,symbol,side,mode,timeframe,entry,stop_loss,tp1,tp2,trailing_stop,trail_distance,quantity,opened_at,status,peak_price) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'OPEN',?)",(str(uuid.uuid4()),setup.symbol,setup.side,setup.mode,setup.timeframe,setup.entry,setup.stop_loss,setup.take_profit_1,setup.take_profit_2,setup.trailing_stop,trail_distance,qty,self._now(),setup.entry))
+                conn.execute("INSERT INTO demo_positions(id,symbol,side,mode,timeframe,entry,stop_loss,tp1,tp2,trailing_stop,trail_distance,quantity,opened_at,status,peak_price) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'OPEN',?)",(str(uuid.uuid4()),symbol,setup.side,setup.mode,setup.timeframe,setup.entry,setup.stop_loss,setup.take_profit_1,setup.take_profit_2,setup.trailing_stop,trail_distance,qty,self._now(),setup.entry))
                 used.add(key); opened+=1
             conn.commit()
         return opened
@@ -148,6 +151,8 @@ class DemoEngine:
         changed=0
         for p in positions:
             try:
+                if str(p["symbol"]).upper() not in TOP20_SYMBOL_SET:
+                    continue
                 df=await fetch_klines(p["symbol"],p["timeframe"],3)
                 if not df.empty: self._apply_candle(p,float(df.iloc[-1].high),float(df.iloc[-1].low)); changed+=1
             except Exception: continue
@@ -188,7 +193,7 @@ class DemoEngine:
     def status(self)->dict[str,Any]:
         with self.lock,self._connect() as conn:
             a=self._account(conn); total=int(conn.execute("SELECT COUNT(*) FROM demo_trades").fetchone()[0]); wins=int(conn.execute("SELECT COUNT(*) FROM demo_trades WHERE pnl>0").fetchone()[0]); losses=int(conn.execute("SELECT COUNT(*) FROM demo_trades WHERE pnl<0").fetchone()[0]); net=float(conn.execute("SELECT COALESCE(SUM(pnl),0) FROM demo_trades").fetchone()[0]); gp=float(conn.execute("SELECT COALESCE(SUM(pnl),0) FROM demo_trades WHERE pnl>0").fetchone()[0]); gl=float(conn.execute("SELECT COALESCE(SUM(pnl),0) FROM demo_trades WHERE pnl<0").fetchone()[0]); opens=int(conn.execute("SELECT COUNT(*) FROM demo_positions WHERE status='OPEN'").fetchone()[0]); budget=float(a["starting_budget"])
-            return {"enabled":bool(a["enabled"]),"budget":budget,"equity":float(a["equity"]),"pnl":net,"pnl_pct":net/budget*100 if budget else 0,"gross_profit":gp,"gross_loss":gl,"net_pnl":net,"trades":total,"closed_trades":total,"wins":wins,"losses":losses,"win_rate":wins/total*100 if total else 0,"risk_per_trade":float(a["risk_per_trade"]),"max_positions":int(a["max_positions"]),"open_positions":opens,"target_open_positions":int(a["max_positions"]),"free_slots":max(0,int(a["max_positions"])-opens),"updated_at":a["updated_at"],"fee_per_order":self._fee_per_order(),"fee_type":settings.demo_fee_type}
+            return {"enabled":bool(a["enabled"]),"budget":budget,"equity":float(a["equity"]),"pnl":net,"pnl_pct":net/budget*100 if budget else 0,"gross_profit":gp,"gross_loss":gl,"net_pnl":net,"trades":total,"closed_trades":total,"wins":wins,"losses":losses,"win_rate":wins/total*100 if total else 0,"risk_per_trade":float(a["risk_per_trade"]),"max_positions":int(a["max_positions"]),"open_positions":opens,"target_open_positions":int(a["max_positions"]),"free_slots":max(0,int(a["max_positions"])-opens),"updated_at":a["updated_at"],"fee_per_order":self._fee_per_order(),"fee_type":settings.demo_fee_type,"whitelist":list(settings.symbol_list)}
 
     def open_positions(self)->list[dict[str,Any]]:
         with self.lock,self._connect() as conn:return [dict(r) for r in conn.execute("SELECT * FROM demo_positions WHERE status='OPEN' ORDER BY opened_at DESC").fetchall()]
