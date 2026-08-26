@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import datetime, timezone
+from typing import Any
 
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
@@ -54,6 +56,7 @@ class VisualPayload(BaseModel):
     logo_brightness: int = Field(default=100, ge=60, le=140)
     logo_glow: int = Field(default=100, ge=0, le=160)
     effect_strength: int = Field(default=65, ge=0, le=100)
+    advanced: dict[str, Any] = Field(default_factory=dict)
 
 
 class ExecutionPayload(BaseModel):
@@ -96,6 +99,7 @@ class ControlStore:
                     visual_logo_brightness INTEGER NOT NULL DEFAULT 100,
                     visual_logo_glow INTEGER NOT NULL DEFAULT 100,
                     visual_effect_strength INTEGER NOT NULL DEFAULT 65,
+                    visual_advanced_json TEXT NOT NULL DEFAULT '{}',
                     updated_at TEXT NOT NULL
                 )"""
             )
@@ -120,6 +124,7 @@ class ControlStore:
                 "visual_logo_brightness": "ALTER TABLE app_settings ADD COLUMN visual_logo_brightness INTEGER NOT NULL DEFAULT 100",
                 "visual_logo_glow": "ALTER TABLE app_settings ADD COLUMN visual_logo_glow INTEGER NOT NULL DEFAULT 100",
                 "visual_effect_strength": "ALTER TABLE app_settings ADD COLUMN visual_effect_strength INTEGER NOT NULL DEFAULT 65",
+                "visual_advanced_json": "ALTER TABLE app_settings ADD COLUMN visual_advanced_json TEXT NOT NULL DEFAULT '{}'",
             }
             for column, sql in migrations.items():
                 if column not in existing:
@@ -131,9 +136,9 @@ class ControlStore:
                     swing_sl_atr,swing_tp1_rr,swing_tp2_rr,
                     visual_preset,visual_accent,visual_accent2,visual_accent3,visual_metal,
                     visual_background,visual_motion,visual_glow,visual_panel,visual_logo_brightness,
-                    visual_logo_glow,visual_effect_strength,updated_at
+                    visual_logo_glow,visual_effect_strength,visual_advanced_json,updated_at
                 ) VALUES(1,1,1,1,1,1,0.005,0.02,0.75,1.8,2.7,1.35,2.2,4.0,
-                    'tradenex','#55e7ff','#8c5cff','#ff39d1','#c8d0df','grid',1,12,88,100,100,65,?)""",
+                    'tradenex','#55e7ff','#8c5cff','#ff39d1','#c8d0df','grid',1,12,88,100,100,65,'{}',?)""",
                 (datetime.now(timezone.utc).isoformat(),),
             )
             conn.commit()
@@ -161,12 +166,17 @@ class ControlStore:
 
     @staticmethod
     def visual_settings_from_row(row):
-        # Stable offsets are used because visual columns are appended after the legacy settings.
+        try:
+            advanced = json.loads(row[26] or "{}")
+            if not isinstance(advanced, dict):
+                advanced = {}
+        except (TypeError, ValueError):
+            advanced = {}
         return {
             "preset": row[14], "accent": row[15], "accent2": row[16], "accent3": row[17],
             "metal": row[18], "background": row[19], "motion": bool(row[20]),
             "glow": int(row[21]), "panel": int(row[22]), "logo_brightness": int(row[23]),
-            "logo_glow": int(row[24]), "effect_strength": int(row[25]),
+            "logo_glow": int(row[24]), "effect_strength": int(row[25]), "advanced": advanced,
         }
 
     def visual(self):
@@ -181,9 +191,10 @@ class ControlStore:
                 """UPDATE app_settings SET
                     visual_preset=?,visual_accent=?,visual_accent2=?,visual_accent3=?,visual_metal=?,
                     visual_background=?,visual_motion=?,visual_glow=?,visual_panel=?,visual_logo_brightness=?,
-                    visual_logo_glow=?,visual_effect_strength=?,updated_at=? WHERE id=1""",
+                    visual_logo_glow=?,visual_effect_strength=?,visual_advanced_json=?,updated_at=? WHERE id=1""",
                 (p.preset, p.accent, p.accent2, p.accent3, p.metal, p.background, int(p.motion),
-                 p.glow, p.panel, p.logo_brightness, p.logo_glow, p.effect_strength, now),
+                 p.glow, p.panel, p.logo_brightness, p.logo_glow, p.effect_strength,
+                 json.dumps(p.advanced, ensure_ascii=False, separators=(",", ":")), now),
             )
             conn.commit()
         return self.visual()
