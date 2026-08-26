@@ -1,44 +1,93 @@
 (() => {
-  const KEY='tradenex_visual_settings_v2';
-  const defaults={palette:'tradenex',customAccent:'#55e7ff',background:'grid',motion:true,glow:0.6,panel:0.88,logoBrightness:1,logoGlow:1};
-  const palettes={
-    tradenex:{name:'TRADENEX Cyan / Violet',bg:'#03050b',panel:'#0b1020',text:'#f3f7ff',muted:'#77839d',a:'#55e7ff',b:'#4f7cff',c:'#8c5cff',d:'#ff39d1',line:'#55e7ff'},
-    silver:{name:'Silver / Black',bg:'#05070b',panel:'#10151d',text:'#f5f7fb',muted:'#8b94a3',a:'#dce3ec',b:'#aeb8c6',c:'#f6f8fb',d:'#737e8d',line:'#c8d0dc'},
-    gold:{name:'Gold / Black',bg:'#070503',panel:'#120e07',text:'#fff8e7',muted:'#9c9076',a:'#ffd76a',b:'#e7b840',c:'#fff0ac',d:'#a66f18',line:'#d5a63c'},
-    blackgold:{name:'Black / Gold',bg:'#020202',panel:'#0d0a05',text:'#fff7df',muted:'#8f836a',a:'#d8aa3f',b:'#f0c95f',c:'#fff0ae',d:'#85611c',line:'#c79a32'},
-    platinum:{name:'Platinum / Black',bg:'#050608',panel:'#101319',text:'#f7f8fa',muted:'#8c929b',a:'#e8edf2',b:'#c1c9d3',c:'#ffffff',d:'#7a8490',line:'#d6dce3'},
-    blackplatinum:{name:'Black / Platinum',bg:'#020304',panel:'#090c10',text:'#f2f4f7',muted:'#7d8691',a:'#cfd6df',b:'#aab3be',c:'#f0f4f8',d:'#6c7580',line:'#b8c0ca'},
-    obsidianred:{name:'Obsidian / Ruby',bg:'#060304',panel:'#13090c',text:'#fff5f7',muted:'#997e85',a:'#ff6077',b:'#dc405a',c:'#ff9baa',d:'#7d1e34',line:'#e14b64'},
-    emeraldblack:{name:'Emerald / Black',bg:'#020706',panel:'#08120e',text:'#f0fff8',muted:'#78998d',a:'#50efb0',b:'#2cc98d',c:'#a0ffd9',d:'#157356',line:'#48d9a1'},
-    custom:{name:'Custom',bg:'#03050b',panel:'#0b1020',text:'#f3f7ff',muted:'#77839d',a:'#55e7ff',b:'#4f7cff',c:'#8c5cff',d:'#ff39d1',line:'#55e7ff'}
+  const KEY = 'tradenex_visual_settings_v2';
+  const palettes = {
+    tradenex: { name:'TRADENEX', accent:'#55e7ff', accent2:'#8c5cff', accent3:'#ff39d1', metal:'#c8d0df', bg:'#02040a' },
+    cyan: { name:'Cyber Cyan', accent:'#55e7ff', accent2:'#4f7cff', accent3:'#8c5cff', metal:'#d8f9ff', bg:'#02040a' },
+    silver: { name:'Silver / Black', accent:'#d7e2ef', accent2:'#8fa3bd', accent3:'#f4f7fb', metal:'#ffffff', bg:'#030507' },
+    gold: { name:'Gold / Black', accent:'#f5c451', accent2:'#d89b2b', accent3:'#fff1a8', metal:'#f9e3a1', bg:'#050402' },
+    platinum: { name:'Platinum / Black', accent:'#e7eef7', accent2:'#9eb0c2', accent3:'#ffffff', metal:'#d6e0ea', bg:'#040607' },
+    blackgold: { name:'Black / Gold', accent:'#ffca4a', accent2:'#a87514', accent3:'#ffe6a3', metal:'#f0cf72', bg:'#050403' },
+    blackplatinum: { name:'Black / Platinum', accent:'#eaf0f6', accent2:'#aab8c6', accent3:'#ffffff', metal:'#d9e2ea', bg:'#020304' },
+    obsidian: { name:'Obsidian / Ruby', accent:'#ff5c78', accent2:'#a92749', accent3:'#ff9daf', metal:'#e7c5cc', bg:'#050205' },
+    emerald: { name:'Emerald / Black', accent:'#42f5a7', accent2:'#159b6a', accent3:'#a9ffd8', metal:'#c9f7e4', bg:'#020604' },
   };
-  const backgrounds={grid:'Cyber Grid',matrix:'Matrix Flow',particles:'Floating Particles',aurora:'Aurora Field',scanlines:'Scanline Field',stars:'Starfield',clean:'Clean',off:'Static Dark'};
-  const $=(s,r=document)=>r.querySelector(s); const $$=(s,r=document)=>[...r.querySelectorAll(s)];
-  const load=()=>{try{return {...defaults,...JSON.parse(localStorage.getItem(KEY)||'{}')}}catch{return {...defaults}}};
-  const save=s=>localStorage.setItem(KEY,JSON.stringify(s)); let state=load();
-  const hsl=(h,s,l)=>`hsl(${Math.round((h+360)%360)} ${Math.round(Math.max(0,Math.min(100,s)))}% ${Math.round(Math.max(0,Math.min(100,l)))}%)`;
-  const hexToHsl=hex=>{const x=hex.replace('#','');const r=parseInt(x.slice(0,2),16)/255,g=parseInt(x.slice(2,4),16)/255,b=parseInt(x.slice(4,6),16)/255,max=Math.max(r,g,b),min=Math.min(r,g,b);let h=0,s=0;const l=(max+min)/2;if(max!==min){const d=max-min;s=l>.5?d/(2-max-min):d/(max+min);switch(max){case r:h=(g-b)/d+(g<b?6:0);break;case g:h=(b-r)/d+2;break;default:h=(r-g)/d+4}h/=6}return[h*360,s*100,l*100]};
-  function palette(){if(state.palette==='custom'){const [h,s,l]=hexToHsl(state.customAccent);return {...palettes.custom,a:state.customAccent,b:hsl(h+38,Math.max(45,s),Math.min(78,l+3)),c:hsl(h-38,Math.max(40,s),Math.min(76,l+10)),d:hsl(h+80,Math.max(40,s),Math.min(72,l-3)),line:state.customAccent}}return palettes[state.palette]||palettes.tradenex}
-  function ensureAmbience(){let el=$('#tradenexAmbience');if(!el){el=document.createElement('div');el.id='tradenexAmbience';el.setAttribute('aria-hidden','true');document.body.prepend(el)}return el}
-  function syncControls(){const p=palette();[['themePalette',state.palette],['themeBackground',state.background]].forEach(([id,v])=>{const e=$('#'+id);if(e)e.value=v});const c=$('#themeAccent');if(c)c.value=state.customAccent;for(const [id,val,mul] of [['themeGlow',state.glow,100],['themePanel',state.panel,100],['themeLogoBrightness',state.logoBrightness,100],['themeLogoGlow',state.logoGlow,100]]){const e=$('#'+id);if(e)e.value=val;const out=$('#'+id+'Value');if(out)out.textContent=`${Math.round(val*mul)}%`}const m=$('#themeMotion');if(m)m.checked=state.motion;const label=$('#themeStateLabel');if(label)label.textContent=`${p.name} · ${backgrounds[state.background]||state.background}`}
-  function apply(){const p=palette(),root=document.documentElement.style;root.setProperty('--theme-accent',p.a);root.setProperty('--theme-accent-2',p.b);root.setProperty('--theme-accent-3',p.c);root.setProperty('--theme-accent-4',p.d);root.setProperty('--theme-line',p.line);root.setProperty('--theme-bg',p.bg);root.setProperty('--theme-panel',p.panel);root.setProperty('--theme-text',p.text);root.setProperty('--theme-muted',p.muted);root.setProperty('--theme-glow',String(state.glow));root.setProperty('--theme-panel-alpha',String(state.panel));
-    /* Drive the original UI palette as well, so every accent-colored component follows the selected theme. */
-    const [h,s,l]=hexToHsl(p.a);root.setProperty('--cyan',p.a);root.setProperty('--blue',p.b);root.setProperty('--violet',p.c);root.setProperty('--magenta',p.d);root.setProperty('--line',`color-mix(in srgb, ${p.line} 22%, transparent)`);root.setProperty('--line2',`color-mix(in srgb, ${p.c} 30%, transparent)`);root.setProperty('--glow',`0 0 ${Math.round(40+80*state.glow)}px color-mix(in srgb, ${p.a} 18%, transparent)`);
-    document.body.dataset.palette=state.palette;document.body.dataset.background=state.background;document.body.classList.toggle('motion-off',!state.motion);
-    const amb=ensureAmbience();amb.className=`ambience ambience-${state.background}`;amb.style.setProperty('--a',p.a);amb.style.setProperty('--b',p.b);amb.style.setProperty('--c',p.c);amb.style.setProperty('--d',p.d);amb.style.setProperty('--strength',String(state.glow));
-    const logo=$('.brand-mark img');if(logo)logo.style.filter=`brightness(${state.logoBrightness}) drop-shadow(0 0 ${Math.max(4,24*state.logoGlow)}px color-mix(in srgb,var(--theme-accent) 50%,transparent))`;
-    syncControls();
+  const defaults = { preset:'tradenex', accent:'#55e7ff', accent2:'#8c5cff', accent3:'#ff39d1', metal:'#c8d0df', background:'grid', motion:true, glow:12, panel:88, logoBrightness:100, logoGlow:100, effectStrength:65 };
+  const $ = (s, root=document) => root.querySelector(s);
+  const $$ = (s, root=document) => [...root.querySelectorAll(s)];
+  const load = () => { try { return { ...defaults, ...(JSON.parse(localStorage.getItem(KEY) || '{}')) }; } catch { return { ...defaults }; } };
+  const save = s => localStorage.setItem(KEY, JSON.stringify(s));
+  let state = load();
+
+  function hexToRgb(hex){ const h=hex.replace('#',''); return {r:parseInt(h.slice(0,2),16),g:parseInt(h.slice(2,4),16),b:parseInt(h.slice(4,6),16)}; }
+  function rgba(hex,a){ const {r,g,b}=hexToRgb(hex); return `rgba(${r},${g},${b},${a})`; }
+  function applyPalette(id){ const p=palettes[id] || palettes.tradenex; state.preset=id; state.accent=p.accent; state.accent2=p.accent2; state.accent3=p.accent3; state.metal=p.metal; save(state); apply(); }
+
+  function ensureAmbience(){
+    let layer=$('#tradenexAmbience');
+    if(!layer){
+      layer=document.createElement('div');
+      layer.id='tradenexAmbience';
+      layer.innerHTML='<div class="ambience-grid"></div><div class="ambience-noise"></div><div class="ambience-glow a1"></div><div class="ambience-glow a2"></div><div class="ambience-particles"></div><div class="ambience-scanlines"></div>';
+      document.body.prepend(layer);
+    }
+    return layer;
   }
-  function mountLogo(){const mark=$('.brand-mark');if(!mark)return;mark.classList.add('theme-logo');mark.innerHTML=`<img src="./tradenex-logo.png" alt="TRADENEX" onerror="this.style.display='none';this.parentElement.textContent='NX'">`;const b=$('.brand');if(b){const s=b.querySelector('strong');if(s)s.textContent='TRADENEX';const sp=b.querySelector('span');if(sp)sp.textContent='AI TRADING INTELLIGENCE'}}
-  function presetButtons(){return Object.entries(palettes).filter(([k])=>k!=='custom').map(([k,v])=>`<button type="button" class="theme-preset ${state.palette===k?'active':''}" data-palette="${k}"><i style="background:linear-gradient(135deg,${v.a},${v.b},${v.c})"></i><span>${v.name}</span></button>`).join('')}
-  function bindPresetButtons(){const root=$('#tradenexVisualLab');if(!root)return;$$('.theme-preset',root).forEach(b=>b.addEventListener('click',()=>{state.palette=b.dataset.palette;save(state);renderPresetGrid();apply()}))}
-  function renderPresetGrid(){const root=$('#tradenexVisualLab');if(!root)return;const grid=$('.theme-preset-grid',root);if(grid)grid.innerHTML=presetButtons();bindPresetButtons();syncControls()}
-  function mountSettings(){const root=$('#settings');if(!root||$('#tradenexVisualLab'))return;const wrap=document.createElement('div');wrap.id='tradenexVisualLab';wrap.className='tradenex-theme-grid';wrap.innerHTML=`
-    <section class="glass tradenex-theme-card theme-wide"><span class="eyebrow">TRADENEX VISUAL LAB</span><h3>Komplette Farb-Paletten</h3><p class="theme-help">Die Palette übernimmt Akzent-, Button-, Border-, Glow-, Hintergrund- und Panel-Farben. Profit bleibt grün und Verlust rot für klare Finanzsemantik.</p><div class="theme-preset-grid"></div><div class="theme-control"><span>Custom Akzent</span><input id="themeAccent" type="color" value="${state.customAccent}"></div></section>
-    <section class="glass tradenex-theme-card"><span class="eyebrow">AMBIENCE ENGINE</span><h3>Interaktive Hintergründe</h3><p class="theme-help">Die Effekte laufen auf einer eigenen Layer hinter der UI und werden nicht mehr vom Dashboard verdeckt.</p><div class="theme-control"><span>Effekt</span><select id="themeBackground">${Object.entries(backgrounds).map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}</select></div><div class="theme-control"><span>Animationen</span><input id="themeMotion" type="checkbox"></div><div class="theme-control"><span>Effekt-Stärke</span><div><input id="themeGlow" type="range" min="0" max="1" step="0.05"><div id="themeGlowValue" class="theme-range-value"></div></div></div><div class="theme-control"><span>Panel-Stärke</span><div><input id="themePanel" type="range" min="0.55" max="0.98" step="0.01"><div id="themePanelValue" class="theme-range-value"></div></div></div><div class="theme-state"><span>Status</span><strong id="themeStateLabel"></strong></div></section>
-    <section class="glass tradenex-theme-card"><span class="eyebrow">LOGO</span><h3>TRADENEX Identity</h3><div class="theme-control"><span>Logo-Helligkeit</span><div><input id="themeLogoBrightness" type="range" min="0.6" max="1.4" step="0.01"><div id="themeLogoBrightnessValue" class="theme-range-value"></div></div></div><div class="theme-control"><span>Logo-Glow</span><div><input id="themeLogoGlow" type="range" min="0" max="1.6" step="0.05"><div id="themeLogoGlowValue" class="theme-range-value"></div></div></div></section>`;root.appendChild(wrap);renderPresetGrid();
-    $('#themeAccent').addEventListener('input',e=>{state.palette='custom';state.customAccent=e.target.value;save(state);renderPresetGrid();apply()});$('#themeBackground').addEventListener('change',e=>{state.background=e.target.value;save(state);apply()});$('#themeMotion').addEventListener('change',e=>{state.motion=e.target.checked;save(state);apply()});$('#themeGlow').addEventListener('input',e=>{state.glow=Number(e.target.value);save(state);apply()});$('#themePanel').addEventListener('input',e=>{state.panel=Number(e.target.value);save(state);apply()});$('#themeLogoBrightness').addEventListener('input',e=>{state.logoBrightness=Number(e.target.value);save(state);apply()});$('#themeLogoGlow').addEventListener('input',e=>{state.logoGlow=Number(e.target.value);save(state);apply()});syncControls()}
-  function loadCss(){if(document.querySelector('link[data-tradenex-theme]'))return;const link=document.createElement('link');link.rel='stylesheet';link.href='./theme.css';link.dataset.tradenexTheme='1';document.head.appendChild(link)}
+
+  function apply(){
+    const root=document.documentElement.style;
+    root.setProperty('--theme-accent',state.accent);
+    root.setProperty('--theme-accent-2',state.accent2);
+    root.setProperty('--theme-accent-3',state.accent3);
+    root.setProperty('--theme-metal',state.metal);
+    root.setProperty('--theme-bg',state.background==='clean'?'#03050b':(palettes[state.preset]?.bg || '#03050b'));
+    root.setProperty('--theme-glow',String(state.glow/100));
+    root.setProperty('--theme-panel-alpha',String(state.panel/100));
+    root.setProperty('--theme-effect-strength',String(state.effectStrength/100));
+    root.setProperty('--cyan',state.accent);
+    root.setProperty('--blue',state.accent2);
+    root.setProperty('--violet',state.accent2);
+    root.setProperty('--magenta',state.accent3);
+    root.setProperty('--silver',state.metal);
+    document.body.dataset.themePreset=state.preset;
+    document.body.dataset.ambience=state.background;
+    document.body.classList.toggle('motion-off',!state.motion);
+    const layer=ensureAmbience(); layer.className=''; layer.id='tradenexAmbience'; layer.dataset.effect=state.background; layer.dataset.motion=String(state.motion);
+    const logo=document.querySelector('.brand-mark img');
+    if(logo) logo.style.filter=`brightness(${state.logoBrightness/100}) drop-shadow(0 0 ${Math.max(4,24*state.logoGlow/100)}px ${rgba(state.accent,state.logoGlow/100*.28)})`;
+    const fields={themePreset:state.preset,themeAccent:state.accent,themeBackground:state.background,themeMotion:state.motion,themeGlow:state.glow,themePanel:state.panel,themeEffectStrength:state.effectStrength,themeLogoBrightness:state.logoBrightness,themeLogoGlow:state.logoGlow};
+    Object.entries(fields).forEach(([id,val])=>{const el=$('#'+id);if(!el)return;if(el.type==='checkbox')el.checked=!!val;else el.value=val;});
+    const vals={themeGlowValue:state.glow+'%',themePanelValue:state.panel+'%',themeEffectStrengthValue:state.effectStrength+'%',themeLogoBrightnessValue:state.logoBrightness+'%',themeLogoGlowValue:state.logoGlow+'%',themePresetName:palettes[state.preset]?.name||'TRADENEX'};
+    Object.entries(vals).forEach(([id,val])=>{const el=$('#'+id);if(el)el.textContent=val;});
+  }
+
+  function mountLogo(){
+    const mark=document.querySelector('.brand-mark'); if(!mark)return;
+    mark.classList.add('theme-logo');
+    mark.innerHTML='<img src="./tradenex-logo.png" alt="TRADENEX" onerror="this.style.display=\'none\';this.parentElement.textContent=\'NX\'">';
+    const brand=document.querySelector('.brand'); if(brand){const strong=brand.querySelector('strong');if(strong)strong.textContent='TRADENEX';const span=brand.querySelector('span');if(span)span.textContent='AI TRADING INTELLIGENCE';}
+  }
+
+  function mountSettings(){
+    const root=$('#settings'); if(!root||$('#tradenexVisualLab'))return;
+    const wrap=document.createElement('div'); wrap.id='tradenexVisualLab'; wrap.className='tradenex-theme-grid';
+    const buttons=Object.entries(palettes).map(([id,p])=>`<button class="theme-preset-card" data-preset="${id}"><i style="--p1:${p.accent};--p2:${p.accent2};--p3:${p.accent3}"></i><b>${p.name}</b></button>`).join('');
+    wrap.innerHTML=`<section class="glass tradenex-theme-card theme-full"><span class="eyebrow">TRADENEX VISUAL LAB</span><h3>Farbwelten & Identität</h3><p class="theme-help">Komplette UI-Paletten statt nur einer einzelnen Akzentfarbe.</p><div class="theme-control"><span>Preset</span><div><select id="themePreset"><option value="">Custom</option>${Object.entries(palettes).map(([id,p])=>`<option value="${id}">${p.name}</option>`).join('')}</select><div id="themePresetName" class="theme-range-value"></div></div></div><div class="theme-preset-grid">${buttons}</div><div class="theme-control"><span>Custom Akzent</span><input id="themeAccent" type="color" value="${state.accent}"></div><div class="theme-control"><span>Custom Zweitfarbe</span><input id="themeAccent2" type="color" value="${state.accent2}"></div><div class="theme-control"><span>Custom Highlight</span><input id="themeAccent3" type="color" value="${state.accent3}"></div></section><section class="glass tradenex-theme-card"><span class="eyebrow">AMBIENCE ENGINE</span><h3>Interaktive Hintergründe</h3><p class="theme-help">Die Effekte laufen auf einer eigenen Layer hinter der gesamten Oberfläche.</p><div class="theme-control"><span>Style</span><select id="themeBackground"><option value="grid">Cyber Grid</option><option value="matrix">Matrix Flow</option><option value="particles">Floating Particles</option><option value="aurora">Aurora Field</option><option value="scanlines">Scanline Field</option><option value="stars">Starfield</option><option value="clean">Clean</option><option value="off">Static Dark</option></select></div><div class="theme-control"><span>Animationen</span><input id="themeMotion" type="checkbox" ${state.motion?'checked':''}></div><div class="theme-control"><span>Effekt-Stärke</span><div><input id="themeEffectStrength" type="range" min="0" max="100" value="${state.effectStrength}"><div id="themeEffectStrengthValue" class="theme-range-value">${state.effectStrength}%</div></div></div><div class="theme-control"><span>Glow-Stärke</span><div><input id="themeGlow" type="range" min="0" max="30" value="${state.glow}"><div id="themeGlowValue" class="theme-range-value">${state.glow}%</div></div></div><div class="theme-control"><span>Glass / Panel</span><div><input id="themePanel" type="range" min="55" max="98" value="${state.panel}"><div id="themePanelValue" class="theme-range-value">${state.panel}%</div></div></div></section><section class="glass tradenex-theme-card"><span class="eyebrow">LOGO IDENTITY</span><h3>TRADENEX Bull</h3><p class="theme-help">Dasselbe Logo wie Splash und EXE-Branding.</p><div class="theme-control"><span>Logo-Helligkeit</span><div><input id="themeLogoBrightness" type="range" min="60" max="140" value="${state.logoBrightness}"><div id="themeLogoBrightnessValue" class="theme-range-value">${state.logoBrightness}%</div></div></div><div class="theme-control"><span>Logo-Glow</span><div><input id="themeLogoGlow" type="range" min="0" max="160" value="${state.logoGlow}"><div id="themeLogoGlowValue" class="theme-range-value">${state.logoGlow}%</div></div></div></section>`;
+    root.appendChild(wrap);
+    $('#themePreset').addEventListener('change',e=>{if(e.target.value)applyPalette(e.target.value);else{state.preset='custom';save(state);apply();}});
+    $$('.theme-preset-card').forEach(b=>b.addEventListener('click',()=>applyPalette(b.dataset.preset)));
+    $('#themeAccent').addEventListener('input',e=>{state.preset='custom';state.accent=e.target.value;save(state);apply()});
+    $('#themeAccent2').addEventListener('input',e=>{state.preset='custom';state.accent2=e.target.value;save(state);apply()});
+    $('#themeAccent3').addEventListener('input',e=>{state.preset='custom';state.accent3=e.target.value;save(state);apply()});
+    $('#themeBackground').addEventListener('change',e=>{state.background=e.target.value;save(state);apply()});
+    $('#themeMotion').addEventListener('change',e=>{state.motion=e.target.checked;save(state);apply()});
+    $('#themeEffectStrength').addEventListener('input',e=>{state.effectStrength=Number(e.target.value);save(state);apply()});
+    $('#themeGlow').addEventListener('input',e=>{state.glow=Number(e.target.value);save(state);apply()});
+    $('#themePanel').addEventListener('input',e=>{state.panel=Number(e.target.value);save(state);apply()});
+    $('#themeLogoBrightness').addEventListener('input',e=>{state.logoBrightness=Number(e.target.value);save(state);apply()});
+    $('#themeLogoGlow').addEventListener('input',e=>{state.logoGlow=Number(e.target.value);save(state);apply()});
+  }
+
+  function loadCss(){if(document.querySelector('link[data-tradenex-theme]'))return;const link=document.createElement('link');link.rel='stylesheet';link.href='./theme.css?v=2';link.dataset.tradenexTheme='1';document.head.appendChild(link)}
   function init(){loadCss();mountLogo();mountSettings();apply()}
-  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init,{once:true});else init();
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init,{once:true}); else init();
 })();
