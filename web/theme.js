@@ -169,3 +169,10 @@
 
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init,{once:true}); else init();
 })();
+
+// Isolated Design Studio bootstrap. Trading/scanner logic is not touched.
+(()=>{
+  const loadAsset=href=>new Promise(resolve=>{if(document.querySelector(`link[href="${href}"]`))return resolve();const l=document.createElement('link');l.rel='stylesheet';l.href=href;l.onload=resolve;l.onerror=resolve;document.head.appendChild(l)});
+  const loadScript=src=>new Promise(resolve=>{if(document.querySelector(`script[src="${src}"]`))return resolve();const s=document.createElement('script');s.src=src;s.onload=resolve;s.onerror=resolve;document.head.appendChild(s)});
+  (async()=>{await loadAsset('./design-pro.css?v=1');await loadScript('./design-pro.js?v=1');if(window.__TRADENEX_DESIGN_READY)await window.__TRADENEX_DESIGN_READY;await loadScript('./ambience-engine-v4.js?v=1')})();
+})();
