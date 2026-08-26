@@ -41,6 +41,21 @@ class SettingsPayload(BaseModel):
     swing_tp2_rr: float = Field(default=4.0, ge=0.5, le=50.0)
 
 
+class VisualPayload(BaseModel):
+    preset: str = "tradenex"
+    accent: str = Field(default="#55e7ff", pattern=r"^#[0-9a-fA-F]{6}$")
+    accent2: str = Field(default="#8c5cff", pattern=r"^#[0-9a-fA-F]{6}$")
+    accent3: str = Field(default="#ff39d1", pattern=r"^#[0-9a-fA-F]{6}$")
+    metal: str = Field(default="#c8d0df", pattern=r"^#[0-9a-fA-F]{6}$")
+    background: str = "grid"
+    motion: bool = True
+    glow: int = Field(default=12, ge=0, le=30)
+    panel: int = Field(default=88, ge=55, le=98)
+    logo_brightness: int = Field(default=100, ge=60, le=140)
+    logo_glow: int = Field(default=100, ge=0, le=160)
+    effect_strength: int = Field(default=65, ge=0, le=100)
+
+
 class ExecutionPayload(BaseModel):
     mode: str
 
@@ -69,6 +84,18 @@ class ControlStore:
                     swing_sl_atr REAL NOT NULL DEFAULT 1.35,
                     swing_tp1_rr REAL NOT NULL DEFAULT 2.2,
                     swing_tp2_rr REAL NOT NULL DEFAULT 4.0,
+                    visual_preset TEXT NOT NULL DEFAULT 'tradenex',
+                    visual_accent TEXT NOT NULL DEFAULT '#55e7ff',
+                    visual_accent2 TEXT NOT NULL DEFAULT '#8c5cff',
+                    visual_accent3 TEXT NOT NULL DEFAULT '#ff39d1',
+                    visual_metal TEXT NOT NULL DEFAULT '#c8d0df',
+                    visual_background TEXT NOT NULL DEFAULT 'grid',
+                    visual_motion INTEGER NOT NULL DEFAULT 1,
+                    visual_glow INTEGER NOT NULL DEFAULT 12,
+                    visual_panel INTEGER NOT NULL DEFAULT 88,
+                    visual_logo_brightness INTEGER NOT NULL DEFAULT 100,
+                    visual_logo_glow INTEGER NOT NULL DEFAULT 100,
+                    visual_effect_strength INTEGER NOT NULL DEFAULT 65,
                     updated_at TEXT NOT NULL
                 )"""
             )
@@ -81,6 +108,18 @@ class ControlStore:
                 "swing_sl_atr": "ALTER TABLE app_settings ADD COLUMN swing_sl_atr REAL NOT NULL DEFAULT 1.35",
                 "swing_tp1_rr": "ALTER TABLE app_settings ADD COLUMN swing_tp1_rr REAL NOT NULL DEFAULT 2.2",
                 "swing_tp2_rr": "ALTER TABLE app_settings ADD COLUMN swing_tp2_rr REAL NOT NULL DEFAULT 4.0",
+                "visual_preset": "ALTER TABLE app_settings ADD COLUMN visual_preset TEXT NOT NULL DEFAULT 'tradenex'",
+                "visual_accent": "ALTER TABLE app_settings ADD COLUMN visual_accent TEXT NOT NULL DEFAULT '#55e7ff'",
+                "visual_accent2": "ALTER TABLE app_settings ADD COLUMN visual_accent2 TEXT NOT NULL DEFAULT '#8c5cff'",
+                "visual_accent3": "ALTER TABLE app_settings ADD COLUMN visual_accent3 TEXT NOT NULL DEFAULT '#ff39d1'",
+                "visual_metal": "ALTER TABLE app_settings ADD COLUMN visual_metal TEXT NOT NULL DEFAULT '#c8d0df'",
+                "visual_background": "ALTER TABLE app_settings ADD COLUMN visual_background TEXT NOT NULL DEFAULT 'grid'",
+                "visual_motion": "ALTER TABLE app_settings ADD COLUMN visual_motion INTEGER NOT NULL DEFAULT 1",
+                "visual_glow": "ALTER TABLE app_settings ADD COLUMN visual_glow INTEGER NOT NULL DEFAULT 12",
+                "visual_panel": "ALTER TABLE app_settings ADD COLUMN visual_panel INTEGER NOT NULL DEFAULT 88",
+                "visual_logo_brightness": "ALTER TABLE app_settings ADD COLUMN visual_logo_brightness INTEGER NOT NULL DEFAULT 100",
+                "visual_logo_glow": "ALTER TABLE app_settings ADD COLUMN visual_logo_glow INTEGER NOT NULL DEFAULT 100",
+                "visual_effect_strength": "ALTER TABLE app_settings ADD COLUMN visual_effect_strength INTEGER NOT NULL DEFAULT 65",
             }
             for column, sql in migrations.items():
                 if column not in existing:
@@ -89,8 +128,12 @@ class ControlStore:
                 """INSERT OR IGNORE INTO app_settings(
                     id,scalp_enabled,swing_enabled,new_setups,new_trades,auto_scan_enabled,
                     risk_per_trade,max_daily_loss,scalp_sl_atr,scalp_tp1_rr,scalp_tp2_rr,
-                    swing_sl_atr,swing_tp1_rr,swing_tp2_rr,updated_at
-                ) VALUES(1,1,1,1,1,1,0.005,0.02,0.75,1.8,2.7,1.35,2.2,4.0,?)""",
+                    swing_sl_atr,swing_tp1_rr,swing_tp2_rr,
+                    visual_preset,visual_accent,visual_accent2,visual_accent3,visual_metal,
+                    visual_background,visual_motion,visual_glow,visual_panel,visual_logo_brightness,
+                    visual_logo_glow,visual_effect_strength,updated_at
+                ) VALUES(1,1,1,1,1,1,0.005,0.02,0.75,1.8,2.7,1.35,2.2,4.0,
+                    'tradenex','#55e7ff','#8c5cff','#ff39d1','#c8d0df','grid',1,12,88,100,100,65,?)""",
                 (datetime.now(timezone.utc).isoformat(),),
             )
             conn.commit()
@@ -112,8 +155,38 @@ class ControlStore:
                 "swing_sl_atr": float(row[11]),
                 "swing_tp1_rr": float(row[12]),
                 "swing_tp2_rr": float(row[13]),
-                "updated_at": row[14],
+                "visual": self.visual_settings_from_row(row),
+                "updated_at": row[-1],
             }
+
+    @staticmethod
+    def visual_settings_from_row(row):
+        # Stable offsets are used because visual columns are appended after the legacy settings.
+        return {
+            "preset": row[14], "accent": row[15], "accent2": row[16], "accent3": row[17],
+            "metal": row[18], "background": row[19], "motion": bool(row[20]),
+            "glow": int(row[21]), "panel": int(row[22]), "logo_brightness": int(row[23]),
+            "logo_glow": int(row[24]), "effect_strength": int(row[25]),
+        }
+
+    def visual(self):
+        with sqlite3.connect(store.db_path) as conn:
+            row = conn.execute("SELECT * FROM app_settings WHERE id=1").fetchone()
+            return self.visual_settings_from_row(row)
+
+    def save_visual(self, p: VisualPayload):
+        now = datetime.now(timezone.utc).isoformat()
+        with sqlite3.connect(store.db_path) as conn:
+            conn.execute(
+                """UPDATE app_settings SET
+                    visual_preset=?,visual_accent=?,visual_accent2=?,visual_accent3=?,visual_metal=?,
+                    visual_background=?,visual_motion=?,visual_glow=?,visual_panel=?,visual_logo_brightness=?,
+                    visual_logo_glow=?,visual_effect_strength=?,updated_at=? WHERE id=1""",
+                (p.preset, p.accent, p.accent2, p.accent3, p.metal, p.background, int(p.motion),
+                 p.glow, p.panel, p.logo_brightness, p.logo_glow, p.effect_strength, now),
+            )
+            conn.commit()
+        return self.visual()
 
     @staticmethod
     def apply_runtime(values: dict):
@@ -183,6 +256,16 @@ def get_settings():
 @router.post("/settings")
 def update_settings(payload: SettingsPayload):
     return control.save_settings(payload)
+
+
+@router.get("/visual")
+def get_visual_settings():
+    return control.visual()
+
+
+@router.post("/visual")
+def update_visual_settings(payload: VisualPayload):
+    return control.save_visual(payload)
 
 
 @router.get("/execution")
