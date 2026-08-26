@@ -23,6 +23,7 @@ exe = EXE(
     a.datas,
     [],
     name="TRADENEX",
+    icon="web/tradenex.ico",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
