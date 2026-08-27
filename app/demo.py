@@ -58,6 +58,10 @@ class DemoEngine:
             if conn.execute("SELECT id FROM demo_account WHERE id=1").fetchone() is None:
                 conn.execute("INSERT INTO demo_account(id,starting_budget,equity,risk_per_trade,max_positions,enabled,auto_scan_user_set,updated_at) VALUES(1,500,500,0.005,20,1,0,?)", (self._now(),))
             else:
+                # Legacy databases could still contain the old 10,000 EUR demo default.
+                # Only migrate an untouched account; a budget explicitly configured by the
+                # user is preserved.
+                conn.execute("UPDATE demo_account SET starting_budget=500,equity=500,updated_at=? WHERE id=1 AND auto_scan_user_set=0 AND starting_budget=10000 AND NOT EXISTS (SELECT 1 FROM demo_positions WHERE status='OPEN') AND NOT EXISTS (SELECT 1 FROM demo_trades)", (self._now(),))
                 conn.execute("UPDATE demo_account SET max_positions=20 WHERE max_positions < 20 AND auto_scan_user_set=0")
             conn.commit()
 
@@ -89,7 +93,7 @@ class DemoEngine:
         if not 1 <= max_positions <= 20: raise ValueError("max_positions must be between 1 and 20")
         with self.lock, self._connect() as conn:
             if conn.execute("SELECT COUNT(*) FROM demo_positions WHERE status='OPEN'").fetchone()[0]: raise ValueError("stop or reset the demo before changing its budget")
-            conn.execute("UPDATE demo_account SET starting_budget=?,equity=?,risk_per_trade=?,max_positions=?,enabled=1,updated_at=? WHERE id=1", (budget,budget,risk_per_trade,max_positions,self._now())); conn.commit()
+            conn.execute("UPDATE demo_account SET starting_budget=?,equity=?,risk_per_trade=?,max_positions=?,enabled=1,auto_scan_user_set=1,updated_at=? WHERE id=1", (budget,budget,risk_per_trade,max_positions,self._now())); conn.commit()
         self.enabled=True
         return self.status()
 
