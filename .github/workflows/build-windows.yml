@@ -41,6 +41,7 @@ jobs:
         run: |
           python -c "from PIL import Image; im=Image.open('web/tradenex-logo.png').convert('RGBA'); im.save('web/tradenex.ico',format='ICO',sizes=[(256,256),(128,128),(64,64),(48,48),(32,32),(24,24),(16,16)])"
 
+      # Rebuild from the latest main commit, including the explicit app.demo packaging fix.
       - name: Build TRADENEX
         run: python -m PyInstaller --noconfirm --clean tradebot.spec
 
