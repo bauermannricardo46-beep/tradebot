@@ -56,7 +56,7 @@ class DemoEngine:
             if "auto_scan_user_set" not in existing:
                 conn.execute("ALTER TABLE demo_account ADD COLUMN auto_scan_user_set INTEGER NOT NULL DEFAULT 0")
             if conn.execute("SELECT id FROM demo_account WHERE id=1").fetchone() is None:
-                conn.execute("INSERT INTO demo_account(id,starting_budget,equity,risk_per_trade,max_positions,enabled,auto_scan_user_set,updated_at) VALUES(1,10000,10000,0.005,20,1,0,?)", (self._now(),))
+                conn.execute("INSERT INTO demo_account(id,starting_budget,equity,risk_per_trade,max_positions,enabled,auto_scan_user_set,updated_at) VALUES(1,500,500,0.005,20,1,0,?)", (self._now(),))
             else:
                 conn.execute("UPDATE demo_account SET max_positions=20 WHERE max_positions < 20 AND auto_scan_user_set=0")
             conn.commit()
@@ -101,7 +101,7 @@ class DemoEngine:
 
     def reset(self) -> dict[str, Any]:
         with self.lock, self._connect() as conn:
-            row=conn.execute("SELECT starting_budget FROM demo_account WHERE id=1").fetchone(); budget=float(row[0]) if row else 10000.0
+            row=conn.execute("SELECT starting_budget FROM demo_account WHERE id=1").fetchone(); budget=float(row[0]) if row else 500.0
             conn.execute("DELETE FROM demo_positions"); conn.execute("DELETE FROM demo_trades")
             conn.execute("UPDATE demo_account SET equity=?,enabled=1,auto_scan_user_set=1,max_positions=20,updated_at=? WHERE id=1",(budget,self._now())); conn.commit()
         self.enabled=True
@@ -148,14 +148,10 @@ class DemoEngine:
     async def update_positions(self, fetch_klines) -> int:
         with self.lock, self._connect() as conn: positions=conn.execute("SELECT * FROM demo_positions WHERE status='OPEN'").fetchall()
         changed=0
-        now=datetime.now(timezone.utc)
         for p in positions:
             try:
                 df=await fetch_klines(p["symbol"],p["timeframe"],40)
                 if df.empty: continue
-                # Never evaluate a just-opened position against the candle that
-                # produced its entry. That candle's historical high/low can sit
-                # beyond the new stop and would close the trade immediately.
                 candle=df.iloc[-1]
                 candle_time=getattr(candle,"open_time",None)
                 opened_at=datetime.fromisoformat(str(p["opened_at"]).replace("Z","+00:00"))
