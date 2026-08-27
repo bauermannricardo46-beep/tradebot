@@ -1,11 +1,8 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_all, collect_data_files
 
-# IMPORTANT: build TRADENEX as ONEDIR, not ONEFILE.
-# The previous one-file builds failed on the user's Windows machine while
-# reopening the embedded PyInstaller archive during extraction. ONEDIR keeps
-# the Python files and native libraries beside the executable, so there is no
-# runtime self-extraction step and therefore no _MEI archive extraction risk.
+# Windows release is ONEDIR. Keep native Python libraries beside the EXE and
+# avoid both PyInstaller ONEFILE extraction and pywebview/pythonnet loading.
 app_datas, app_binaries, app_hiddenimports = collect_all("app")
 app_py_sources = collect_data_files("app", include_py_files=True)
 
@@ -16,12 +13,10 @@ hiddenimports = list(dict.fromkeys(
         "app.demo",
         "app.demo_enhancements",
         "app.strategies",
-        "webview",
     ]
 ))
 
 datas = list(app_datas) + list(app_py_sources) + [("web", "web")]
-
 
 a = Analysis(
     ["launcher.py"],
@@ -32,7 +27,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["pytest"],
+    excludes=["pytest", "webview", "pythonnet", "clr_loader"],
     noarchive=True,
 )
 
