@@ -155,9 +155,12 @@ class DemoEngine:
                 side=str(getattr(setup,"side","")).upper(); mode=str(getattr(setup,"mode","")).upper()
                 key=self._setup_key(setup)
                 if key in used: continue
-                # Same signal may be returned by every scan. Do not re-open the exact same
-                # signal, but allow a later signal for the same coin (new candle/price/levels).
-                if conn.execute("SELECT 1 FROM demo_positions WHERE symbol=? AND side=? AND mode=? AND timeframe=? AND ABS(entry-?) < 1e-12 AND ABS(stop_loss-?) < 1e-12 AND ABS(tp1-?) < 1e-12 AND ABS(tp2-?) < 1e-12",(symbol,side,mode,str(getattr(setup,"timeframe","5m")),float(getattr(setup,"entry",0)),float(getattr(setup,"stop_loss",0)),float(getattr(setup,"take_profit_1",getattr(setup,"entry",0))),float(getattr(setup,"take_profit_2",getattr(setup,"entry",0)))).fetchone():
+                params=(symbol,side,mode,str(getattr(setup,"timeframe","5m")),float(getattr(setup,"entry",0)),float(getattr(setup,"stop_loss",0)),float(getattr(setup,"take_profit_1",getattr(setup,"entry",0))),float(getattr(setup,"take_profit_2",getattr(setup,"entry",0))))
+                duplicate=conn.execute(
+                    "SELECT 1 FROM demo_positions WHERE symbol=? AND side=? AND mode=? AND timeframe=? AND ABS(entry-?) < 1e-12 AND ABS(stop_loss-?) < 1e-12 AND ABS(tp1-?) < 1e-12 AND ABS(tp2-?) < 1e-12",
+                    params,
+                ).fetchone()
+                if duplicate:
                     continue
                 if conn.execute("SELECT 1 FROM demo_positions WHERE status='OPEN' AND symbol=? AND side=? AND mode=?",(symbol,side,mode)).fetchone():
                     continue
