@@ -42,6 +42,9 @@ jobs:
           python -c "import app.demo, app.main; print('app.demo:', app.demo.__file__); print('app.main:', app.main.__file__)"
           if ($LASTEXITCODE -ne 0) { throw "Python import preflight failed" }
 
+      - name: Run Python tests
+        run: pytest -q
+
       - name: Generate TRADENEX Windows icon
         shell: pwsh
         run: |
