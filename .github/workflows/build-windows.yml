@@ -53,9 +53,10 @@ jobs:
       - name: Build TRADENEX ONEDIR
         run: python -m PyInstaller --noconfirm --clean --log-level=INFO tradebot.spec
 
-      - name: Verify ONEDIR package structure
+      - name: Verify ONEDIR package structure and runtime isolation
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
           $appDir = "dist\TRADENEX"
           $exePath = "$appDir\TRADENEX.exe"
           if (!(Test-Path $exePath)) { throw "TRADENEX.exe was not created at $exePath" }
@@ -63,6 +64,12 @@ jobs:
           $exe = Get-Item $exePath
           Write-Host "EXE size: $($exe.Length) bytes"
           if ($exe.Length -le 100000) { throw "TRADENEX.exe is unexpectedly small or incomplete" }
+
+          $pythonRuntime = Get-ChildItem $appDir -Recurse -File -Filter "Python.Runtime.dll" -ErrorAction SilentlyContinue
+          if ($pythonRuntime) { throw "Python.Runtime.dll must not be present in the Windows build: $($pythonRuntime.FullName -join ', ')" }
+          $pythonNet = Get-ChildItem $appDir -Recurse -File -Include "pythonnet*.dll","clr_loader*.dll" -ErrorAction SilentlyContinue
+          if ($pythonNet) { throw "pythonnet/clr_loader artifacts must not be present in the Windows build: $($pythonNet.FullName -join ', ')" }
+          Write-Host "No pywebview/pythonnet runtime artifacts detected"
           Write-Host "ONEDIR structure verified"
 
       - name: Smoke test clean ONEDIR build
@@ -118,6 +125,7 @@ jobs:
           Extract the complete ZIP and start TRADENEX\TRADENEX.exe.
           Do not move TRADENEX.exe out of the TRADENEX folder because the _internal folder is required.
 
+          The desktop dashboard opens in the installed Microsoft Edge or Google Chrome app window.
           Live market data: Binance public market-data API
           Trading: PAPER TRADING / DEMO ONLY until exchange execution is explicitly configured
           Data directory: %LOCALAPPDATA%\TradeBotAI\data
@@ -135,7 +143,11 @@ jobs:
           $exePath = (Resolve-Path "$verifyDir\TRADENEX\TRADENEX.exe").Path
           if (!(Test-Path $exePath)) { throw "EXE missing after ZIP extraction" }
 
-          $proc = Start-Process -FilePath $exePath -WorkingDirectory (Split-Path $exePath) -PassThru
+          $runtimeDir = Split-Path $exePath
+          $pythonRuntime = Get-ChildItem $runtimeDir -Recurse -File -Filter "Python.Runtime.dll" -ErrorAction SilentlyContinue
+          if ($pythonRuntime) { throw "Python.Runtime.dll is present after ZIP extraction" }
+
+          $proc = Start-Process -FilePath $exePath -WorkingDirectory $runtimeDir -PassThru
           try {
             $ready = $false
             for ($i = 0; $i -lt 60; $i++) {
