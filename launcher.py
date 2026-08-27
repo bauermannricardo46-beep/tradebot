@@ -8,9 +8,8 @@ import threading
 import time
 from pathlib import Path
 
-# Keep the demo engine as a direct dependency of the PyInstaller entrypoint.
-# This prevents the frozen build from dropping app.demo even though app.main
-# reaches it through a package-relative import.
+# Direct import is intentional: it makes app.demo a hard dependency of the
+# PyInstaller entrypoint and catches packaging regressions during the build.
 from app.demo import DemoEngine as _FrozenDemoEngine  # noqa: F401
 
 APP_NAME = "TRADENEX AI"
@@ -25,7 +24,7 @@ def runtime_root() -> Path:
 
 
 def normalize_demo_budget(data_dir: Path) -> None:
-    """Normalize the legacy persisted 10,000 EUR demo bankroll to 500 EUR."""
+    """Migrate legacy 10,000 EUR demo state to 500 EUR without erasing P&L history."""
     db_path = data_dir / "tradebot.db"
     if not db_path.exists():
         return
@@ -37,9 +36,17 @@ def normalize_demo_budget(data_dir: Path) -> None:
             columns = {row[1] for row in conn.execute("PRAGMA table_info(demo_account)")}
             if "starting_budget" not in columns or "equity" not in columns:
                 return
+            row = conn.execute("SELECT starting_budget FROM demo_account WHERE id=1").fetchone()
+            if not row or float(row[0]) != 10000.0:
+                return
+            net_pnl = 0.0
+            if "demo_trades" in tables:
+                pnl_row = conn.execute("SELECT COALESCE(SUM(pnl),0) FROM demo_trades").fetchone()
+                net_pnl = float(pnl_row[0] or 0.0)
+            equity = 500.0 + net_pnl
             conn.execute(
-                "UPDATE demo_account SET starting_budget=500,equity=500,updated_at=? WHERE starting_budget=10000",
-                (time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),),
+                "UPDATE demo_account SET starting_budget=500,equity=?,updated_at=? WHERE id=1 AND starting_budget=10000",
+                (equity, time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())),
             )
             conn.commit()
     except Exception as exc:
@@ -99,7 +106,6 @@ def main() -> None:
     os.environ.setdefault("TRADEBOT_DATA_DIR", str(data_dir))
     os.environ.setdefault("TRADEBOT_MODEL_DIR", str(model_dir))
 
-    # Normalize legacy persisted demo state before importing the application.
     normalize_demo_budget(data_dir)
 
     try:
