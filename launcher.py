@@ -8,6 +8,11 @@ import threading
 import time
 from pathlib import Path
 
+# Keep the demo engine as a direct dependency of the PyInstaller entrypoint.
+# This prevents the frozen build from dropping app.demo even though app.main
+# reaches it through a package-relative import.
+from app.demo import DemoEngine as _FrozenDemoEngine  # noqa: F401
+
 APP_NAME = "TRADENEX AI"
 HOST = "127.0.0.1"
 PORT = 8765
