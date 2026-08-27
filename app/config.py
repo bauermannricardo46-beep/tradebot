@@ -22,7 +22,8 @@ class Settings(BaseSettings):
     risk_per_trade: float = 0.005
     max_concurrent_positions: int = 20
     max_daily_loss: float = 0.02
-    min_confidence: int = 0
+    # Global execution gate. Strategy-specific scanner gates remain 80/82%.
+    min_confidence: int = 87
     symbols: str = ",".join(TOP20_SYMBOLS)
     scalping_timeframe: str = "5m"
     swing_timeframe: str = "1h"
@@ -44,10 +45,8 @@ class Settings(BaseSettings):
     swing_tp1_rr: float = 2.2
     swing_tp2_rr: float = 4.0
 
-    # Hyperliquid Perpetuals Tier 0 (0% HYPE staking discount).
-    # Fees are rates applied to the actual notional at entry and exit.
-    hyperliquid_maker_fee: float = 0.00015  # 0.015%
-    hyperliquid_taker_fee: float = 0.00045  # 0.045%
+    hyperliquid_maker_fee: float = 0.00015
+    hyperliquid_taker_fee: float = 0.00045
     demo_fee_type: str = "TAKER"
 
     scalp_profit_lock_activation_pct: float = 0.8
