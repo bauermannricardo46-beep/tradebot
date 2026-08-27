@@ -53,36 +53,53 @@ jobs:
       - name: Build TRADENEX
         run: python -m PyInstaller --noconfirm --clean --log-level=INFO tradebot.spec
 
-      - name: Verify packaged modules
+      - name: Verify EXE artifact
         shell: pwsh
         run: |
           if (!(Test-Path "dist\TRADENEX.exe")) { throw "TRADENEX.exe was not created" }
-          python -c "from pathlib import Path; p=Path('dist/TRADENEX.exe'); print('EXE size:', p.stat().st_size); assert p.stat().st_size > 1000000"
-          python -m PyInstaller.utils.cliutils.archive_viewer -l -r -b dist\TRADENEX.exe | Out-File packaged-modules.txt
-          $foundDemo = Select-String -Path packaged-modules.txt -Pattern "app.demo","app/demo","app\\demo" -SimpleMatch
-          $foundMain = Select-String -Path packaged-modules.txt -Pattern "app.main","app/main","app\\main" -SimpleMatch
-          if (!$foundDemo -or !$foundMain) { throw "app.demo/app.main not found in recursive frozen archive" }
+          $exe = Get-Item "dist\TRADENEX.exe"
+          Write-Host "EXE size: $($exe.Length) bytes"
+          if ($exe.Length -le 1000000) { throw "TRADENEX.exe is unexpectedly small" }
 
-      - name: EXE startup smoke test
+      - name: EXE startup and API smoke test
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
           $proc = Start-Process -FilePath "dist\TRADENEX.exe" -PassThru
           try {
             $ready = $false
-            for ($i = 0; $i -lt 40; $i++) {
+            $health = $null
+            for ($i = 0; $i -lt 60; $i++) {
               Start-Sleep -Milliseconds 500
+              if ($proc.HasExited) {
+                throw "TRADENEX.exe exited during startup with code $($proc.ExitCode)"
+              }
               try {
                 $health = Invoke-RestMethod "http://127.0.0.1:8765/health" -TimeoutSec 2
                 if ($health.status -eq "ok") { $ready = $true; break }
               } catch {}
             }
             if (!$ready) {
-              if (!$proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
-              throw "Frozen EXE did not expose /health within 20 seconds"
+              throw "Frozen EXE did not expose /health within 30 seconds"
             }
-            $health | ConvertTo-Json -Depth 8
+            if ($health.status -ne "ok") { throw "Health endpoint returned an invalid status" }
+            if ($health.execution_mode -ne "DEMO") { throw "Unexpected default execution mode: $($health.execution_mode)" }
+
+            $root = Invoke-RestMethod "http://127.0.0.1:8765/" -TimeoutSec 5
+            if ($root.name -ne "TRADENEX") { throw "Root API returned unexpected application name" }
+
+            $execution = Invoke-RestMethod "http://127.0.0.1:8765/execution" -TimeoutSec 5
+            if ($execution.mode -ne "DEMO") { throw "Execution API returned unexpected mode" }
+
+            $ai = Invoke-RestMethod "http://127.0.0.1:8765/ai/status" -TimeoutSec 5
+            if ($null -eq $ai.SCALP -or $null -eq $ai.SWING) { throw "AI status endpoint is incomplete" }
+
+            Write-Host "EXE startup/API smoke test PASSED"
+            $health | ConvertTo-Json -Depth 12
+            $root | ConvertTo-Json -Depth 4
           } finally {
             if (!$proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
+            Start-Sleep -Milliseconds 500
           }
 
       - name: Prepare versioned release package
