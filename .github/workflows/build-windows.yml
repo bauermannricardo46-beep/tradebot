@@ -50,22 +50,27 @@ jobs:
         run: |
           python -c "from PIL import Image; im=Image.open('web/tradenex-logo.png').convert('RGBA'); im.save('web/tradenex.ico',format='ICO',sizes=[(256,256),(128,128),(64,64),(48,48),(32,32),(24,24),(16,16)])"
 
-      - name: Build TRADENEX
+      - name: Build TRADENEX ONEDIR
         run: python -m PyInstaller --noconfirm --clean --log-level=INFO tradebot.spec
 
-      - name: Verify EXE artifact
+      - name: Verify ONEDIR package structure
         shell: pwsh
         run: |
-          if (!(Test-Path "dist\TRADENEX.exe")) { throw "TRADENEX.exe was not created" }
-          $exe = Get-Item "dist\TRADENEX.exe"
+          $appDir = "dist\TRADENEX"
+          $exePath = "$appDir\TRADENEX.exe"
+          if (!(Test-Path $exePath)) { throw "TRADENEX.exe was not created at $exePath" }
+          if (!(Test-Path "$appDir\_internal")) { throw "PyInstaller _internal directory is missing" }
+          $exe = Get-Item $exePath
           Write-Host "EXE size: $($exe.Length) bytes"
           if ($exe.Length -le 1000000) { throw "TRADENEX.exe is unexpectedly small" }
+          Write-Host "ONEDIR structure verified"
 
-      - name: EXE startup and API smoke test
+      - name: Smoke test clean ONEDIR build
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $proc = Start-Process -FilePath "dist\TRADENEX.exe" -PassThru
+          $workDir = (Resolve-Path "dist\TRADENEX").Path
+          $proc = Start-Process -FilePath "$workDir\TRADENEX.exe" -WorkingDirectory $workDir -PassThru
           try {
             $ready = $false
             $health = $null
@@ -79,9 +84,7 @@ jobs:
                 if ($health.status -eq "ok") { $ready = $true; break }
               } catch {}
             }
-            if (!$ready) {
-              throw "Frozen EXE did not expose /health within 30 seconds"
-            }
+            if (!$ready) { throw "ONEDIR EXE did not expose /health within 30 seconds" }
             if ($health.status -ne "ok") { throw "Health endpoint returned an invalid status" }
             if ($health.execution_mode -ne "DEMO") { throw "Unexpected default execution mode: $($health.execution_mode)" }
 
@@ -94,40 +97,78 @@ jobs:
             $ai = Invoke-RestMethod "http://127.0.0.1:8765/ai/status" -TimeoutSec 5
             if ($null -eq $ai.SCALP -or $null -eq $ai.SWING) { throw "AI status endpoint is incomplete" }
 
-            Write-Host "EXE startup/API smoke test PASSED"
-            $health | ConvertTo-Json -Depth 12
-            $root | ConvertTo-Json -Depth 4
+            Write-Host "CLEAN ONEDIR STARTUP/API SMOKE TEST PASSED"
           } finally {
             if (!$proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
             Start-Sleep -Milliseconds 500
           }
 
-      - name: Prepare versioned release package
+      - name: Prepare portable release package
         shell: pwsh
         run: |
-          $releaseDir = "release"
-          New-Item -ItemType Directory -Force -Path $releaseDir | Out-Null
-          Copy-Item "dist\TRADENEX.exe" "$releaseDir\TRADENEX.exe"
-          Set-Content -Path "$releaseDir\VERSION.txt" -Value $env:VERSION
-          Set-Content -Path "$releaseDir\README.txt" -Value @"
+          $releaseRoot = "release\TRADENEX"
+          New-Item -ItemType Directory -Force -Path $releaseRoot | Out-Null
+          Copy-Item "dist\TRADENEX\*" $releaseRoot -Recurse -Force
+          Set-Content -Path "release\VERSION.txt" -Value $env:VERSION
+          Set-Content -Path "release\README.txt" -Value @"
           TRADENEX AI Windows Edition
           Version: $env:VERSION
 
-          Start: TRADENEX.exe
+          IMPORTANT: This is a portable ONEDIR build.
+          Extract the complete ZIP and start TRADENEX\TRADENEX.exe.
+          Do not move TRADENEX.exe out of the TRADENEX folder because the _internal folder is required.
+
           Live market data: Binance public market-data API
           Trading: PAPER TRADING / DEMO ONLY until exchange execution is explicitly configured
           Data directory: %LOCALAPPDATA%\TradeBotAI\data
           Models directory: %LOCALAPPDATA%\TradeBotAI\models
           "@
-          Compress-Archive -Path "$releaseDir\*" -DestinationPath "TRADENEX-Windows-x64-$env:VERSION.zip" -Force
+          Compress-Archive -Path "release\TRADENEX","release\VERSION.txt","release\README.txt" -DestinationPath "TRADENEX-Windows-x64-$env:VERSION.zip" -Force
+
+      - name: Verify downloaded ZIP by extracting and launching it
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $verifyDir = "zip-verify"
+          if (Test-Path $verifyDir) { Remove-Item $verifyDir -Recurse -Force }
+          Expand-Archive -Path "TRADENEX-Windows-x64-$env:VERSION.zip" -DestinationPath $verifyDir -Force
+          $exePath = (Resolve-Path "$verifyDir\TRADENEX\TRADENEX.exe").Path
+          if (!(Test-Path $exePath)) { throw "EXE missing after ZIP extraction" }
+
+          $proc = Start-Process -FilePath $exePath -WorkingDirectory (Split-Path $exePath) -PassThru
+          try {
+            $ready = $false
+            for ($i = 0; $i -lt 60; $i++) {
+              Start-Sleep -Milliseconds 500
+              if ($proc.HasExited) { throw "Extracted TRADENEX.exe exited with code $($proc.ExitCode)" }
+              try {
+                $health = Invoke-RestMethod "http://127.0.0.1:8765/health" -TimeoutSec 2
+                if ($health.status -eq "ok") { $ready = $true; break }
+              } catch {}
+            }
+            if (!$ready) { throw "Extracted release did not expose /health within 30 seconds" }
+            Write-Host "DOWNLOADED ZIP EXTRACTION + STARTUP TEST PASSED"
+          } finally {
+            if (!$proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
+            Start-Sleep -Milliseconds 500
+          }
+
+      - name: Generate release checksums
+        shell: pwsh
+        run: |
+          $zipHash = (Get-FileHash "TRADENEX-Windows-x64-$env:VERSION.zip" -Algorithm SHA256).Hash
+          Set-Content -Path "SHA256SUMS.txt" -Value "$zipHash  TRADENEX-Windows-x64-$env:VERSION.zip"
+          Write-Host "SHA256: $zipHash"
 
       - name: Upload versioned workflow artifact
         uses: actions/upload-artifact@v4
         with:
           name: TRADENEX-Windows-x64-v${{ env.VERSION }}
           path: |
-            release/
             TRADENEX-Windows-x64-${{ env.VERSION }}.zip
+            SHA256SUMS.txt
+            release/VERSION.txt
+            release/README.txt
           if-no-files-found: error
 
       - name: Create GitHub Release
@@ -147,7 +188,7 @@ jobs:
         run: |
           $assets = @(
             "TRADENEX-Windows-x64-$env:VERSION.zip",
-            "release\TRADENEX.exe",
+            "SHA256SUMS.txt",
             "release\VERSION.txt",
             "release\README.txt"
           )
