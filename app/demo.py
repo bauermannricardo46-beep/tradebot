@@ -118,11 +118,7 @@ class DemoEngine:
     def _account(self, conn): return conn.execute("SELECT * FROM demo_account WHERE id=1").fetchone()
 
     def consider_setups(self, setups: list[Any]) -> int:
-        """Automatically turn every valid scanner opportunity into a paper position.
-
-        There is deliberately no confidence gate here and no artificial TOP20
-        whitelist. The scanner's configured symbol universe is the source of truth.
-        """
+        """Automatically turn every valid scanner opportunity into a paper position."""
         if not setups or not self.enabled: return 0
         ranked=sorted((s for s in setups if s is not None),key=lambda s:(float(getattr(s,"probability",0)),float(getattr(s,"expected_value_r",0))),reverse=True)
         opened=0
@@ -152,12 +148,22 @@ class DemoEngine:
     async def update_positions(self, fetch_klines) -> int:
         with self.lock, self._connect() as conn: positions=conn.execute("SELECT * FROM demo_positions WHERE status='OPEN'").fetchall()
         changed=0
+        now=datetime.now(timezone.utc)
         for p in positions:
             try:
                 df=await fetch_klines(p["symbol"],p["timeframe"],40)
-                if not df.empty:
-                    # app/__init__.py installs the adaptive peak/momentum exit.
-                    self._apply_candle(p,float(df.iloc[-1].high),float(df.iloc[-1].low)); changed+=1
+                if df.empty: continue
+                # Never evaluate a just-opened position against the candle that
+                # produced its entry. That candle's historical high/low can sit
+                # beyond the new stop and would close the trade immediately.
+                candle=df.iloc[-1]
+                candle_time=getattr(candle,"open_time",None)
+                opened_at=datetime.fromisoformat(str(p["opened_at"]).replace("Z","+00:00"))
+                if candle_time is not None:
+                    candle_time=datetime.fromisoformat(str(candle_time).replace("Z","+00:00")) if isinstance(candle_time,str) else candle_time
+                    if getattr(candle_time,"tzinfo",None) is None: candle_time=candle_time.replace(tzinfo=timezone.utc)
+                    if candle_time <= opened_at: continue
+                self._apply_candle(p,float(candle.high),float(candle.low)); changed+=1
             except Exception: continue
         return changed
 
