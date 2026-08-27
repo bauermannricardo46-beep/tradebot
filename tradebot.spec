@@ -46,7 +46,10 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    # Keep the one-file archive uncompressed by UPX. This avoids Windows
+    # security/AV scanners interfering with extraction of individual bundled
+    # Python files from the CArchive at startup.
+    upx=False,
     console=False,
     disable_windowed_traceback=False,
     version=None,
