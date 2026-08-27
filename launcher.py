@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sqlite3
 import sys
 import threading
 import time
@@ -16,6 +17,28 @@ def runtime_root() -> Path:
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parent
+
+
+def normalize_demo_budget(data_dir: Path) -> None:
+    """Normalize the legacy persisted 10,000 EUR demo bankroll to 500 EUR."""
+    db_path = data_dir / "tradebot.db"
+    if not db_path.exists():
+        return
+    try:
+        with sqlite3.connect(db_path, timeout=5) as conn:
+            tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            if "demo_account" not in tables:
+                return
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(demo_account)")}
+            if "starting_budget" not in columns or "equity" not in columns:
+                return
+            conn.execute(
+                "UPDATE demo_account SET starting_budget=500,equity=500,updated_at=? WHERE starting_budget=10000",
+                (time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),),
+            )
+            conn.commit()
+    except Exception as exc:
+        logging.warning("Demo-Budget konnte beim Start nicht normalisiert werden: %s", exc)
 
 
 def start_server():
@@ -70,6 +93,9 @@ def main() -> None:
     model_dir.mkdir(parents=True, exist_ok=True)
     os.environ.setdefault("TRADEBOT_DATA_DIR", str(data_dir))
     os.environ.setdefault("TRADEBOT_MODEL_DIR", str(model_dir))
+
+    # Normalize legacy persisted demo state before importing the application.
+    normalize_demo_budget(data_dir)
 
     try:
         server, _ = start_server()
