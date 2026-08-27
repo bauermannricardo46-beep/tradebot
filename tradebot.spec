@@ -1,7 +1,18 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_submodules
 
-hiddenimports = collect_submodules("app") + ["webview"]
+# Explicitly include the runtime modules used by the FastAPI demo engine.
+# collect_submodules("app") is kept as a broad safety net, while the explicit
+# imports prevent PyInstaller from omitting app.demo in the frozen build.
+hiddenimports = collect_submodules("app") + [
+    "app.demo",
+    "app.demo_enhancements",
+    "app.strategies",
+    "webview",
+]
+
+# De-duplicate while preserving order.
+hiddenimports = list(dict.fromkeys(hiddenimports))
 
 a = Analysis(
     ["launcher.py"],
