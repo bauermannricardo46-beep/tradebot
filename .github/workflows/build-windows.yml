@@ -36,14 +36,50 @@ jobs:
       - name: Install dependencies
         run: python -m pip install --upgrade pip && pip install -r requirements.txt && pip install pillow
 
+      - name: Python import preflight
+        shell: pwsh
+        run: |
+          python -c "import app.demo, app.main; print('app.demo:', app.demo.__file__); print('app.main:', app.main.__file__)"
+          if ($LASTEXITCODE -ne 0) { throw "Python import preflight failed" }
+
       - name: Generate TRADENEX Windows icon
         shell: pwsh
         run: |
           python -c "from PIL import Image; im=Image.open('web/tradenex-logo.png').convert('RGBA'); im.save('web/tradenex.ico',format='ICO',sizes=[(256,256),(128,128),(64,64),(48,48),(32,32),(24,24),(16,16)])"
 
-      # Rebuild from the latest main commit, including the explicit app.demo packaging fix.
       - name: Build TRADENEX
-        run: python -m PyInstaller --noconfirm --clean tradebot.spec
+        run: python -m PyInstaller --noconfirm --clean --log-level=INFO tradebot.spec
+
+      - name: Verify packaged modules
+        shell: pwsh
+        run: |
+          if (!(Test-Path "dist\TRADENEX.exe")) { throw "TRADENEX.exe was not created" }
+          python -c "from pathlib import Path; p=Path('dist/TRADENEX.exe'); print('EXE size:', p.stat().st_size); assert p.stat().st_size > 1000000"
+          python -m PyInstaller.utils.cliutils.archive_viewer dist\TRADENEX.exe | Out-File packaged-modules.txt
+          Select-String -Path packaged-modules.txt -Pattern "app.demo|app.main" -SimpleMatch
+          if ($LASTEXITCODE -ne 0) { throw "app.demo/app.main not found in frozen archive" }
+
+      - name: EXE startup smoke test
+        shell: pwsh
+        run: |
+          $proc = Start-Process -FilePath "dist\TRADENEX.exe" -PassThru
+          try {
+            $ready = $false
+            for ($i = 0; $i -lt 40; $i++) {
+              Start-Sleep -Milliseconds 500
+              try {
+                $health = Invoke-RestMethod "http://127.0.0.1:8765/health" -TimeoutSec 2
+                if ($health.status -eq "ok") { $ready = $true; break }
+              } catch {}
+            }
+            if (!$ready) {
+              if (!$proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
+              throw "Frozen EXE did not expose /health within 20 seconds"
+            }
+            $health | ConvertTo-Json -Depth 8
+          } finally {
+            if (!$proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
+          }
 
       - name: Prepare versioned release package
         shell: pwsh
