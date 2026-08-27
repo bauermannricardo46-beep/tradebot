@@ -78,10 +78,24 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$env:RELEASE_TAG" `
-            "TRADENEX-Windows-x64-$env:VERSION.zip" `
-            "release\TRADENEX.exe" `
-            "release\VERSION.txt" `
-            "release\README.txt" `
             --repo "${{ github.repository }}" `
             --title "TRADENEX $env:VERSION" `
             --generate-notes
+
+      - name: Upload release assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $assets = @(
+            "TRADENEX-Windows-x64-$env:VERSION.zip",
+            "release\TRADENEX.exe",
+            "release\VERSION.txt",
+            "release\README.txt"
+          )
+          foreach ($asset in $assets) {
+            gh release upload "$env:RELEASE_TAG" $asset --repo "${{ github.repository }}" --clobber
+            if ($LASTEXITCODE -ne 0) {
+              throw "Failed to upload release asset: $asset"
+            }
+          }
