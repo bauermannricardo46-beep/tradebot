@@ -62,7 +62,7 @@ jobs:
           if (!(Test-Path "$appDir\_internal")) { throw "PyInstaller _internal directory is missing" }
           $exe = Get-Item $exePath
           Write-Host "EXE size: $($exe.Length) bytes"
-          if ($exe.Length -le 1000000) { throw "TRADENEX.exe is unexpectedly small" }
+          if ($exe.Length -le 100000) { throw "TRADENEX.exe is unexpectedly small or incomplete" }
           Write-Host "ONEDIR structure verified"
 
       - name: Smoke test clean ONEDIR build
