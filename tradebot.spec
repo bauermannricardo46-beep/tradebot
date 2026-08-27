@@ -1,30 +1,38 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_all, collect_data_files
 
-# Explicitly include the runtime modules used by the FastAPI demo engine.
-# collect_submodules("app") is kept as a broad safety net, while the explicit
-# imports prevent PyInstaller from omitting app.demo in the frozen build.
-hiddenimports = collect_submodules("app") + [
-    "app.demo",
-    "app.demo_enhancements",
-    "app.strategies",
-    "webview",
-]
+# Do not rely on import analysis alone for this package. The previous builds
+# passed hidden-imports but still produced an EXE that could not import
+# app.demo at runtime. Collect the complete app package and its Python source
+# files, then keep a clean explicit hidden-import list as a second guard.
+app_datas, app_binaries, app_hiddenimports = collect_all("app")
+app_py_sources = collect_data_files("app", include_py_files=True)
 
-# De-duplicate while preserving order.
-hiddenimports = list(dict.fromkeys(hiddenimports))
+hiddenimports = list(dict.fromkeys(
+    list(app_hiddenimports)
+    + [
+        "app",
+        "app.demo",
+        "app.demo_enhancements",
+        "app.strategies",
+        "webview",
+    ]
+))
+
+datas = list(app_datas) + list(app_py_sources) + [("web", "web")]
+
 
 a = Analysis(
     ["launcher.py"],
     pathex=["."],
-    binaries=[],
-    datas=[("web", "web")],
+    binaries=list(app_binaries),
+    datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
     excludes=["pytest"],
-    noarchive=False,
+    noarchive=True,
 )
 pyz = PYZ(a.pure)
 exe = EXE(
