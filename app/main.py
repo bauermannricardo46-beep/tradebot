@@ -30,16 +30,7 @@ execution = ExecutionMode(store.db_path)
 monitor_task: asyncio.Task | None = None
 demo_task: asyncio.Task | None = None
 
-demo_scan_state = {
-    "running": False,
-    "task_running": False,
-    "last_scan_at": None,
-    "scalp": {"scanned": 0, "qualified": 0, "rejected": 0, "errors": 0},
-    "swing": {"scanned": 0, "qualified": 0, "rejected": 0, "errors": 0},
-    "best_setup": None,
-    "opened_last_cycle": 0,
-    "last_error": None,
-}
+demo_scan_state = {"running": False, "task_running": False, "last_scan_at": None, "scalp": {"scanned": 0, "qualified": 0, "rejected": 0, "errors": 0}, "swing": {"scanned": 0, "qualified": 0, "rejected": 0, "errors": 0}, "best_setup": None, "opened_last_cycle": 0, "last_error": None}
 
 
 def web_directory() -> str:
@@ -56,7 +47,7 @@ def web_directory() -> str:
 class DemoConfig(BaseModel):
     budget: float = Field(gt=0)
     risk_per_trade: float = Field(default=0.005, ge=0.001, le=0.03)
-    max_positions: int = Field(default=5, ge=1, le=20)
+    max_positions: int = Field(default=20, ge=1, le=20)
 
 
 class DemoToggle(BaseModel):
@@ -94,13 +85,9 @@ async def demo_loop() -> None:
                 demo_scan_state["last_error"] = None
                 demo_scan_state["opened_last_cycle"] = 0
                 try:
-                    scalp, swing = await asyncio.gather(
-                        _scan_mode("SCALP", persist=False),
-                        _scan_mode("SWING", persist=False),
-                    )
+                    scalp, swing = await asyncio.gather(_scan_mode("SCALP", persist=False), _scan_mode("SWING", persist=False))
                     demo_scan_state["scalp"] = {k: scalp.get(k, 0) for k in ("scanned", "qualified", "rejected", "errors")}
                     demo_scan_state["swing"] = {k: swing.get(k, 0) for k in ("scanned", "qualified", "rejected", "errors")}
-
                     candidates = scalp["setups"] + swing["setups"]
                     candidates.sort(key=lambda x: (x.probability, x.expected_value_r), reverse=True)
                     demo_scan_state["best_setup"] = candidates[0] if candidates else None
@@ -133,7 +120,9 @@ async def lifespan(app: FastAPI):
     global monitor_task, demo_task
     collector.start()
     monitor_task = asyncio.create_task(monitor_positions(), name="tradenex-paper-monitor")
-    if demo.enabled and execution.get()["mode"] == "DEMO":
+    if execution.get()["mode"] == "DEMO":
+        if not demo.enabled:
+            demo.set_enabled(True)
         await ensure_demo_task()
     yield
     for task in (monitor_task, demo_task):
@@ -175,23 +164,7 @@ async def analyze_symbol(symbol: str, mode: str):
 
 @app.get("/")
 def root():
-    return {
-        "name": "TRADENEX",
-        "version": "1.4.1",
-        "paper_trading": settings.paper_trading,
-        "ui": "/index.html",
-        "execution": execution.get(),
-        "demo": demo.status(),
-        "demo_scan": demo_scan_state,
-        "data": {"directory": settings.data_dir, "database": str(store.db_path), "collector_interval_seconds": settings.collector_interval_seconds},
-        "modes": {
-            "SCALP": {"timeframe": settings.scalping_timeframe, "min_confidence": settings.scalp_min_confidence, "max_positions": settings.max_scalp_positions, "model_ready": engine.ready("SCALP"), "analysis": ["1m", "5m", "15m", "1h", "4h"]},
-            "SWING": {"timeframe": settings.swing_timeframe, "min_confidence": settings.swing_min_confidence, "max_positions": settings.max_swing_positions, "model_ready": engine.ready("SWING"), "analysis": ["5m", "15m", "1h", "4h"]},
-        },
-        "sides": ["LONG", "SHORT"],
-        "time_based_exit": False,
-        "dynamic_exit": True,
-    }
+    return {"name": "TRADENEX", "version": "1.4.1", "paper_trading": settings.paper_trading, "ui": "/index.html", "execution": execution.get(), "demo": demo.status(), "demo_scan": demo_scan_state, "data": {"directory": settings.data_dir, "database": str(store.db_path), "collector_interval_seconds": settings.collector_interval_seconds}, "modes": {"SCALP": {"timeframe": settings.scalping_timeframe, "min_confidence": settings.scalp_min_confidence, "max_positions": settings.max_scalp_positions, "model_ready": engine.ready("SCALP"), "analysis": ["1m", "5m", "15m", "1h", "4h"]}, "SWING": {"timeframe": settings.swing_timeframe, "min_confidence": settings.swing_min_confidence, "max_positions": settings.max_swing_positions, "model_ready": engine.ready("SWING"), "analysis": ["5m", "15m", "1h", "4h"]}}, "sides": ["LONG", "SHORT"], "time_based_exit": False, "dynamic_exit": True}
 
 
 @app.get("/health")
@@ -317,9 +290,7 @@ async def market_overview():
             df = await fetch_klines(symbol, "1m", 30)
             if len(df) < 2:
                 return None
-            first = float(df.iloc[0].close)
-            last = float(df.iloc[-1].close)
-            change = ((last - first) / first) * 100 if first else 0.0
+            first = float(df.iloc[0].close); last = float(df.iloc[-1].close); change = ((last-first)/first)*100 if first else 0.0
             return {"symbol": symbol, "price": last, "change_30m_pct": change, "volume": float(df.iloc[-1].volume), "timestamp": df.iloc[-1].open_time.isoformat()}
         except Exception as exc:
             return {"symbol": symbol, "error": str(exc)}
@@ -327,8 +298,7 @@ async def market_overview():
 
 
 async def _scan_mode(mode: str, persist: bool = True):
-    mode = mode.upper()
-    timeframe, min_confidence, _, enabled = mode_config(mode)
+    mode = mode.upper(); timeframe, min_confidence, _, enabled = mode_config(mode)
     if not enabled:
         return {"mode": mode, "enabled": False, "timeframe": timeframe, "scanned": 0, "qualified": 0, "rejected": 0, "errors": 0, "setups": []}
 
@@ -337,20 +307,17 @@ async def _scan_mode(mode: str, persist: bool = True):
             _, contexts, df = await analyze_symbol(symbol, mode)
             setups = [score_long_setup(symbol, df, mode, timeframe, contexts), score_short_setup(symbol, df, mode, timeframe, contexts)]
             qualified = [setup for setup in setups if setup is not None and setup.confidence >= min_confidence]
-            rejected_count = len(setups) - len(qualified)
+            rejected_count = len(setups)-len(qualified)
             if persist:
-                for setup in qualified:
-                    store.save_analysis(setup)
+                for setup in qualified: store.save_analysis(setup)
             return qualified, rejected_count, 0
         except Exception:
             return [], 0, 1
 
     batches = await asyncio.gather(*(one(symbol) for symbol in settings.symbol_list))
     results = [setup for qualified, _, _ in batches for setup in qualified]
-    rejected = sum(item[1] for item in batches)
-    errors = sum(item[2] for item in batches)
     results.sort(key=lambda x: (x.probability, x.expected_value_r), reverse=True)
-    return {"mode": mode, "enabled": True, "timeframe": timeframe, "model_ready": engine.ready(mode), "min_confidence": min_confidence, "scanned": len(settings.symbol_list), "qualified": len(results), "rejected": rejected, "errors": errors, "setups": results}
+    return {"mode": mode, "enabled": True, "timeframe": timeframe, "model_ready": engine.ready(mode), "min_confidence": min_confidence, "scanned": len(settings.symbol_list), "qualified": len(results), "rejected": sum(item[1] for item in batches), "errors": sum(item[2] for item in batches), "setups": results}
 
 
 @app.get("/scan")
@@ -370,35 +337,23 @@ async def scan_all_modes():
 async def auto_trade(mode: str, side: str, symbol: str):
     if execution.get()["mode"] == "LIVE":
         raise HTTPException(status_code=409, detail="LIVE ist ausgewählt, aber die Exchange-Execution ist noch nicht konfiguriert. Keine echte Order wurde gesendet.")
-    mode = mode.upper()
-    side = side.upper()
-    symbol = symbol.upper()
-    timeframe, min_confidence, max_positions, enabled = mode_config(mode)
-    if not enabled:
-        raise HTTPException(status_code=409, detail=f"{mode} mode is disabled")
-    if side not in {"LONG", "SHORT"}:
-        raise HTTPException(status_code=400, detail="side must be LONG or SHORT")
-    if symbol not in settings.symbol_list:
-        raise HTTPException(status_code=400, detail="symbol not configured")
-    _, contexts, df = await analyze_symbol(symbol, mode)
-    scorer = score_long_setup if side == "LONG" else score_short_setup
-    setup = scorer(symbol, df, mode, timeframe, contexts)
-    if setup is None or setup.confidence < min_confidence:
-        raise HTTPException(status_code=422, detail=f"no qualifying {mode.lower()} {side.lower()} setup detected")
-    if len(broker.open_positions(mode)) >= max_positions:
-        raise HTTPException(status_code=409, detail=f"maximum {mode.lower()} positions reached")
-    decision = size_position(equity=broker.equity, setup=setup, open_positions=len(broker.open_positions()), daily_pnl=broker.realized_pnl)
-    if not decision.allowed:
-        raise HTTPException(status_code=409, detail=decision.reason)
-    position = broker.open_position(setup, decision.quantity)
-    store.save_analysis(setup)
-    send_push(f"Paper Trade · {mode} {side}", f"{symbol} eröffnet · P={setup.probability:.1%} · EV {setup.expected_value_r:+.2f}R · TP1 {setup.take_profit_1} · TP2 {setup.take_profit_2}", "/index.html")
-    return {"setup": setup, "risk": decision, "position": position, "execution": "DEMO/PAPER_ONLY", "exit_policy": "no time limit; TP2 or dynamic trailing/structure invalidation"}
+    mode=mode.upper(); side=side.upper(); symbol=symbol.upper(); timeframe,min_confidence,max_positions,enabled=mode_config(mode)
+    if not enabled: raise HTTPException(status_code=409, detail=f"{mode} mode is disabled")
+    if side not in {"LONG","SHORT"}: raise HTTPException(status_code=400, detail="side must be LONG or SHORT")
+    if symbol not in settings.symbol_list: raise HTTPException(status_code=400, detail="symbol not configured")
+    _,contexts,df=await analyze_symbol(symbol,mode); scorer=score_long_setup if side=="LONG" else score_short_setup; setup=scorer(symbol,df,mode,timeframe,contexts)
+    if setup is None or setup.confidence<min_confidence: raise HTTPException(status_code=422, detail=f"no qualifying {mode.lower()} {side.lower()} setup detected")
+    if len(broker.open_positions(mode))>=max_positions: raise HTTPException(status_code=409, detail=f"maximum {mode.lower()} positions reached")
+    decision=size_position(equity=broker.equity,setup=setup,open_positions=len(broker.open_positions()),daily_pnl=broker.realized_pnl)
+    if not decision.allowed: raise HTTPException(status_code=409, detail=decision.reason)
+    position=broker.open_position(setup,decision.quantity); store.save_analysis(setup); send_push(f"Paper Trade · {mode} {side}",f"{symbol} eröffnet · P={setup.probability:.1%} · EV {setup.expected_value_r:+.2f}R · TP1 {setup.take_profit_1} · TP2 {setup.take_profit_2}","/index.html")
+    return {"setup":setup,"risk":decision,"position":position,"execution":"DEMO/PAPER_ONLY","exit_policy":"no time limit; TP2 or dynamic trailing/structure invalidation"}
 
 
 @app.get("/positions")
 def positions():
-    return {"equity": broker.equity, "realized_pnl": broker.realized_pnl, "positions": broker.open_positions()}
+    status=demo.status()
+    return {"equity":status["equity"],"realized_pnl":status["net_pnl"],"positions":demo.open_positions()}
 
 
 app.mount("/", StaticFiles(directory=web_directory(), html=True), name="web")
