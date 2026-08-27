@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import sqlite3
+import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 from pathlib import Path
 
 # Direct import is intentional: it makes app.demo a hard dependency of the
@@ -78,23 +81,57 @@ def wait_for_server(timeout: float = 30.0) -> bool:
     return False
 
 
-def open_app(server):
-    import webview
+def _browser_candidates() -> list[Path]:
+    candidates: list[Path] = []
+    if os.name == "nt":
+        program_files = [os.environ.get("PROGRAMFILES"), os.environ.get("PROGRAMFILES(X86)"), os.environ.get("LOCALAPPDATA")]
+        for base in filter(None, program_files):
+            root = Path(base)
+            candidates.extend([
+                root / "Microsoft" / "Edge" / "Application" / "msedge.exe",
+                root / "Google" / "Chrome" / "Application" / "chrome.exe",
+            ])
+    return candidates
 
-    window = webview.create_window(
-        APP_NAME,
-        f"http://{HOST}:{PORT}/splash.html",
-        width=1480,
-        height=920,
-        min_size=(980, 680),
-        resizable=True,
-    )
 
-    def on_closed():
-        server.should_exit = True
+def open_app(server) -> None:
+    """Open the dashboard without pywebview/pythonnet and keep the server alive."""
+    url = f"http://{HOST}:{PORT}/splash.html"
+    app_url = urllib.parse.quote(url, safe=":/?=&%.-_~")
 
-    window.events.closed += on_closed
-    webview.start(debug=False)
+    edge = next((p for p in _browser_candidates() if p.exists()), None)
+    if edge is not None:
+        try:
+            subprocess.Popen(
+                [str(edge), f"--app={url}", "--new-window", "--disable-features=Translate"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except OSError:
+            edge = None
+
+    if edge is None:
+        chrome = shutil.which("chrome") or shutil.which("chrome.exe")
+        if chrome:
+            try:
+                subprocess.Popen(
+                    [chrome, f"--app={url}", "--new-window"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                edge = Path(chrome)
+            except OSError:
+                edge = None
+
+    if edge is None:
+        import webbrowser
+        if not webbrowser.open(url, new=1):
+            raise RuntimeError(f"TRADENEX Dashboard konnte nicht geöffnet werden: {app_url}")
+
+    # The desktop UI is now hosted by the installed browser. Keep the
+    # background server process alive until the user terminates TRADENEX.
+    while not server.should_exit:
+        time.sleep(1.0)
 
 
 def main() -> None:
