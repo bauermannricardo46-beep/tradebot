@@ -11,4 +11,4 @@ scikit-learn>=1.6,<2.0
 joblib>=1.4,<2.0
 pywebpush>=2.0,<3.0
 pywebview>=5.4,<6.0
-pyinstaller>=6.14,<7.0
+pyinstaller==6.22.2
