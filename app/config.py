@@ -20,7 +20,7 @@ def is_allowed_symbol(symbol: str) -> bool:
 class Settings(BaseSettings):
     app_env: str = "development"
     paper_trading: bool = True
-    starting_equity: float = 10_000.0
+    starting_equity: float = 500.0
     risk_per_trade: float = 0.005
     max_concurrent_positions: int = 20
     max_daily_loss: float = 0.02
