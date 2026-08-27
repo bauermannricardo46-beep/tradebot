@@ -2,8 +2,6 @@ from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-# Hard whitelist: the scanner, collector, demo and future live execution may only use these
-# 20 high-liquidity Binance USDT markets. Anything else is rejected before market-data access.
 TOP20_SYMBOLS: tuple[str, ...] = (
     "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT",
     "ADAUSDT", "AVAXUSDT", "LINKUSDT", "SUIUSDT", "NEARUSDT",
@@ -25,7 +23,6 @@ class Settings(BaseSettings):
     max_concurrent_positions: int = 20
     max_daily_loss: float = 0.02
     min_confidence: int = 0
-    # Kept only for backward compatibility; runtime symbol_list is hard-clamped to TOP20_SYMBOLS.
     symbols: str = ",".join(TOP20_SYMBOLS)
     scalping_timeframe: str = "5m"
     swing_timeframe: str = "1h"
@@ -47,8 +44,10 @@ class Settings(BaseSettings):
     swing_tp1_rr: float = 2.2
     swing_tp2_rr: float = 4.0
 
-    hyperliquid_maker_fee: float = 0.004
-    hyperliquid_taker_fee: float = 0.007
+    # Hyperliquid Perpetuals Tier 0 (0% HYPE staking discount).
+    # Fees are rates applied to the actual notional at entry and exit.
+    hyperliquid_maker_fee: float = 0.00015  # 0.015%
+    hyperliquid_taker_fee: float = 0.00045  # 0.045%
     demo_fee_type: str = "TAKER"
 
     scalp_profit_lock_activation_pct: float = 0.8
@@ -69,7 +68,6 @@ class Settings(BaseSettings):
 
     @property
     def symbol_list(self) -> list[str]:
-        # Deliberately ignore env/.env symbol overrides: the trading universe is hard-limited to TOP20_SYMBOLS.
         return list(TOP20_SYMBOLS)
 
 
