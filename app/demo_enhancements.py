@@ -7,7 +7,7 @@ from .demo import DemoEngine
 
 
 class EnhancedDemoEngine(DemoEngine):
-    """Demo extensions: fixed fees and custom peak-aware profit lock."""
+    """Demo extensions: percentage-based fees and peak-aware profit lock."""
 
     def __init__(self, db_path):
         super().__init__(db_path)
@@ -35,12 +35,16 @@ class EnhancedDemoEngine(DemoEngine):
             conn.commit()
 
     @staticmethod
-    def _fee_per_order() -> float:
+    def _fee_rate() -> float:
         return float(
             settings.hyperliquid_maker_fee
             if str(settings.demo_fee_type).upper() == "MAKER"
             else settings.hyperliquid_taker_fee
         )
+
+    @classmethod
+    def _fee_for_order(cls, notional: float) -> float:
+        return max(0.0, float(notional)) * cls._fee_rate()
 
     @staticmethod
     def _profit_pct(entry: float, price: float, side: str) -> float:
@@ -51,7 +55,7 @@ class EnhancedDemoEngine(DemoEngine):
         return (entry - price) / entry * 100.0
 
     def _apply_candle(self, p, high: float, low: float) -> None:
-        """Custom software profit lock: activate at a profit threshold and exit on peak retracement."""
+        """Custom peak-aware profit lock; fees are percentages of actual entry/exit notional."""
         with self.lock, self._connect() as conn:
             row = conn.execute("SELECT * FROM demo_positions WHERE id=?", (p["id"],)).fetchone()
             if not row or row["status"] != "OPEN":
@@ -109,8 +113,8 @@ class EnhancedDemoEngine(DemoEngine):
 
             qty = float(row["quantity"])
             gross_pnl = ((exit_price - entry) if side == "LONG" else (entry - exit_price)) * qty
-            entry_fee = self._fee_per_order()
-            exit_fee = self._fee_per_order()
+            entry_fee = self._fee_for_order(entry * qty)
+            exit_fee = self._fee_for_order(exit_price * qty)
             total_fees = entry_fee + exit_fee
             net_pnl = gross_pnl - total_fees
             risk_distance = abs(entry - float(row["stop_loss"]))
@@ -123,7 +127,7 @@ class EnhancedDemoEngine(DemoEngine):
             )
             conn.execute(
                 "INSERT INTO demo_trades(position_id,closed_at,symbol,side,mode,pnl,result,entry,exit_price,risk_r,gross_pnl,entry_fee,exit_fee,total_fees) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (row["id"], now, row["symbol"], side, row["mode"], net_pnl, result, entry, exit_price, signed_r, gross_pnl, entry_fee, exit_fee, total_fees),
+                (row["id"], now, row["symbol"], side, row["mode"], net_pnl, result, entry, exit_price, risk_distance and signed_r or 0.0, gross_pnl, entry_fee, exit_fee, total_fees),
             )
             conn.execute("UPDATE demo_account SET equity=equity+?,updated_at=? WHERE id=1", (net_pnl, now))
             conn.commit()
