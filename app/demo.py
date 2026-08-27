@@ -58,9 +58,6 @@ class DemoEngine:
             if conn.execute("SELECT id FROM demo_account WHERE id=1").fetchone() is None:
                 conn.execute("INSERT INTO demo_account(id,starting_budget,equity,risk_per_trade,max_positions,enabled,auto_scan_user_set,updated_at) VALUES(1,500,500,0.005,20,1,0,?)", (self._now(),))
             else:
-                # Legacy databases could still contain the old 10,000 EUR demo default.
-                # Only migrate an untouched account; a budget explicitly configured by the
-                # user is preserved.
                 conn.execute("UPDATE demo_account SET starting_budget=500,equity=500,updated_at=? WHERE id=1 AND auto_scan_user_set=0 AND starting_budget=10000 AND NOT EXISTS (SELECT 1 FROM demo_positions WHERE status='OPEN') AND NOT EXISTS (SELECT 1 FROM demo_trades)", (self._now(),))
                 conn.execute("UPDATE demo_account SET max_positions=20 WHERE max_positions < 20 AND auto_scan_user_set=0")
             conn.commit()
@@ -80,12 +77,32 @@ class DemoEngine:
         return datetime.now(timezone.utc).isoformat()
 
     @staticmethod
-    def _fee_per_order() -> float:
+    def _fee_rate() -> float:
         return float(settings.hyperliquid_maker_fee if str(settings.demo_fee_type).upper() == "MAKER" else settings.hyperliquid_taker_fee)
+
+    @classmethod
+    def _fee_for_order(cls, notional: float) -> float:
+        return max(0.0, float(notional)) * cls._fee_rate()
 
     @staticmethod
     def _profit_pct(entry: float, price: float, side: str) -> float:
         return ((price-entry)/entry*100) if side == "LONG" else ((entry-price)/entry*100)
+
+    @staticmethod
+    def _setup_key(setup: Any) -> tuple:
+        """Stable identity for one scanner opportunity; prevents identical re-firing."""
+        symbol = str(getattr(setup, "symbol", "")).strip().upper()
+        side = str(getattr(setup, "side", "")).upper()
+        mode = str(getattr(setup, "mode", "")).upper()
+        timeframe = str(getattr(setup, "timeframe", "")).lower()
+        entry = round(float(getattr(setup, "entry", 0) or 0), 12)
+        stop = round(float(getattr(setup, "stop_loss", 0) or 0), 12)
+        tp1 = round(float(getattr(setup, "take_profit_1", entry) or entry), 12)
+        tp2 = round(float(getattr(setup, "take_profit_2", entry) or entry), 12)
+        signal_time = getattr(setup, "signal_time", None) or getattr(setup, "candle_time", None) or getattr(setup, "open_time", None)
+        if signal_time is None:
+            signal_time = getattr(setup, "timestamp", None)
+        return (symbol, side, mode, timeframe, entry, stop, tp1, tp2, str(signal_time or ""))
 
     def configure(self, budget: float, risk_per_trade: float = 0.005, max_positions: int = 20) -> dict[str, Any]:
         if budget <= 0: raise ValueError("budget must be > 0")
@@ -122,7 +139,7 @@ class DemoEngine:
     def _account(self, conn): return conn.execute("SELECT * FROM demo_account WHERE id=1").fetchone()
 
     def consider_setups(self, setups: list[Any]) -> int:
-        """Automatically turn every valid scanner opportunity into a paper position."""
+        """Automatically open valid opportunities once per unique scanner signal."""
         if not setups or not self.enabled: return 0
         ranked=sorted((s for s in setups if s is not None),key=lambda s:(float(getattr(s,"probability",0)),float(getattr(s,"expected_value_r",0))),reverse=True)
         opened=0
@@ -136,8 +153,14 @@ class DemoEngine:
                 symbol=str(getattr(setup,"symbol","")).strip().upper()
                 if not symbol or symbol not in settings.symbol_list: continue
                 side=str(getattr(setup,"side","")).upper(); mode=str(getattr(setup,"mode","")).upper()
-                key=(symbol,side,mode)
-                if key in used or conn.execute("SELECT 1 FROM demo_positions WHERE status='OPEN' AND symbol=? AND side=? AND mode=?",key).fetchone(): continue
+                key=self._setup_key(setup)
+                if key in used: continue
+                # Same signal may be returned by every scan. Do not re-open the exact same
+                # signal, but allow a later signal for the same coin (new candle/price/levels).
+                if conn.execute("SELECT 1 FROM demo_positions WHERE symbol=? AND side=? AND mode=? AND timeframe=? AND ABS(entry-?) < 1e-12 AND ABS(stop_loss-?) < 1e-12 AND ABS(tp1-?) < 1e-12 AND ABS(tp2-?) < 1e-12",(symbol,side,mode,str(getattr(setup,"timeframe","5m")),float(getattr(setup,"entry",0)),float(getattr(setup,"stop_loss",0)),float(getattr(setup,"take_profit_1",getattr(setup,"entry",0))),float(getattr(setup,"take_profit_2",getattr(setup,"entry",0)))).fetchone():
+                    continue
+                if conn.execute("SELECT 1 FROM demo_positions WHERE status='OPEN' AND symbol=? AND side=? AND mode=?",(symbol,side,mode)).fetchone():
+                    continue
                 entry=float(getattr(setup,"entry",0)); stop=float(getattr(setup,"stop_loss",0)); distance=abs(entry-stop)
                 if entry<=0 or distance<=0: continue
                 equity=float(a["equity"]); qty=min(equity*float(a["risk_per_trade"])/distance,equity/entry)
@@ -173,16 +196,16 @@ class DemoEngine:
             if not r or r["status"]!="OPEN": return
             side=r["side"]; entry=float(r["entry"]); stop=float(r["stop_loss"]); peak=float(r["peak_price"] or entry); peak=max(peak,high) if side=="LONG" else min(peak,low); peak_profit=max(float(r["peak_profit_pct"] or 0),self._profit_pct(entry,peak,side))
             if (side=="LONG" and low<=stop) or (side=="SHORT" and high>=stop):
-                exit_price=stop; qty=float(r["quantity"]); gross=((exit_price-entry) if side=="LONG" else (entry-exit_price))*qty; fee=self._fee_per_order(); net=gross-2*fee; now=self._now(); result="WIN" if net>0 else "LOSS"; risk=abs(entry-stop); signed_r=((exit_price-entry) if side=="LONG" else (entry-exit_price))/risk if risk else 0
+                exit_price=stop; qty=float(r["quantity"]); gross=((exit_price-entry) if side=="LONG" else (entry-exit_price))*qty; entry_fee=self._fee_for_order(entry*qty); exit_fee=self._fee_for_order(exit_price*qty); net=gross-entry_fee-exit_fee; now=self._now(); result="WIN" if net>0 else "LOSS"; risk=abs(entry-stop); signed_r=((exit_price-entry) if side=="LONG" else (entry-exit_price))/risk if risk else 0
                 conn.execute("UPDATE demo_positions SET status='CLOSED',closed_at=?,exit_price=?,pnl=?,exit_reason='INITIAL_STOP',peak_price=?,peak_profit_pct=? WHERE id=?",(now,exit_price,net,peak,peak_profit,r["id"]))
-                conn.execute("INSERT INTO demo_trades(position_id,closed_at,symbol,side,mode,pnl,result,entry,exit_price,risk_r,gross_pnl,entry_fee,exit_fee,total_fees) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(r["id"],now,r["symbol"],side,r["mode"],net,result,entry,exit_price,signed_r,gross,fee,fee,2*fee)); conn.execute("UPDATE demo_account SET equity=equity+?,updated_at=? WHERE id=1",(net,now)); conn.commit()
+                conn.execute("INSERT INTO demo_trades(position_id,closed_at,symbol,side,mode,pnl,result,entry,exit_price,risk_r,gross_pnl,entry_fee,exit_fee,total_fees) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(r["id"],now,r["symbol"],side,r["mode"],net,result,entry,exit_price,signed_r,gross,entry_fee,exit_fee,entry_fee+exit_fee)); conn.execute("UPDATE demo_account SET equity=equity+?,updated_at=? WHERE id=1",(net,now)); conn.commit()
             else:
                 conn.execute("UPDATE demo_positions SET peak_price=?,peak_profit_pct=? WHERE id=?",(peak,peak_profit,r["id"])); conn.commit()
 
     def status(self)->dict[str,Any]:
         with self.lock,self._connect() as conn:
             a=self._account(conn); total=int(conn.execute("SELECT COUNT(*) FROM demo_trades").fetchone()[0]); wins=int(conn.execute("SELECT COUNT(*) FROM demo_trades WHERE pnl>0").fetchone()[0]); losses=int(conn.execute("SELECT COUNT(*) FROM demo_trades WHERE pnl<0").fetchone()[0]); net=float(conn.execute("SELECT COALESCE(SUM(pnl),0) FROM demo_trades").fetchone()[0]); gp=float(conn.execute("SELECT COALESCE(SUM(pnl),0) FROM demo_trades WHERE pnl>0").fetchone()[0]); gl=float(conn.execute("SELECT COALESCE(SUM(pnl),0) FROM demo_trades WHERE pnl<0").fetchone()[0]); opens=int(conn.execute("SELECT COUNT(*) FROM demo_positions WHERE status='OPEN'").fetchone()[0]); budget=float(a["starting_budget"])
-            return {"enabled":bool(a["enabled"]),"budget":budget,"equity":float(a["equity"]),"pnl":net,"pnl_pct":net/budget*100 if budget else 0,"gross_profit":gp,"gross_loss":gl,"net_pnl":net,"trades":total,"closed_trades":total,"wins":wins,"losses":losses,"win_rate":wins/total*100 if total else 0,"risk_per_trade":float(a["risk_per_trade"]),"max_positions":int(a["max_positions"]),"open_positions":opens,"target_open_positions":int(a["max_positions"]),"free_slots":max(0,int(a["max_positions"])-opens),"updated_at":a["updated_at"],"fee_per_order":self._fee_per_order(),"fee_type":settings.demo_fee_type,"whitelist":list(settings.symbol_list)}
+            return {"enabled":bool(a["enabled"]),"budget":budget,"equity":float(a["equity"]),"pnl":net,"pnl_pct":net/budget*100 if budget else 0,"gross_profit":gp,"gross_loss":gl,"net_pnl":net,"trades":total,"closed_trades":total,"wins":wins,"losses":losses,"win_rate":wins/total*100 if total else 0,"risk_per_trade":float(a["risk_per_trade"]),"max_positions":int(a["max_positions"]),"open_positions":opens,"target_open_positions":int(a["max_positions"]),"free_slots":max(0,int(a["max_positions"])-opens),"updated_at":a["updated_at"],"fee_rate":self._fee_rate(),"fee_type":settings.demo_fee_type,"whitelist":list(settings.symbol_list)}
 
     def open_positions(self)->list[dict[str,Any]]:
         with self.lock,self._connect() as conn:return [dict(r) for r in conn.execute("SELECT * FROM demo_positions WHERE status='OPEN' ORDER BY opened_at DESC").fetchall()]
